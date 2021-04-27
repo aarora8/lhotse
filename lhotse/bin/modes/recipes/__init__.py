@@ -10,6 +10,7 @@ from .librispeech import *
 from .ljspeech import *
 from .musan import *
 from .nsc import *
+from .safet import *
 from .switchboard import *
 from .tedlium import *
 from .vctk import *

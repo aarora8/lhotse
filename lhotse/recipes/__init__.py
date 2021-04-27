@@ -12,6 +12,7 @@ from .librispeech import download_librispeech, prepare_librispeech
 from .ljspeech import prepare_ljspeech
 from .mobvoihotwords import download_mobvoihotwords, prepare_mobvoihotwords
 from .musan import download_musan, prepare_musan
+from .safet import prepare_safet
 from .switchboard import prepare_switchboard
 from .tedlium import prepare_tedlium
 from .vctk import download_vctk, prepare_vctk
