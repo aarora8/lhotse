@@ -119,6 +119,7 @@ def prepare_safet(
     audio_paths = check_and_rglob(audio_dir, '*.flac')
     for audio_path in audio_paths:
       recording = Recording.from_file(audio_path)
+      recording = recording.resample(16000)
       recordings.append(recording)
     
     # Create supervision list with transcription, speaker_id,
@@ -160,7 +161,6 @@ def prepare_safet(
             )
           supervisions.append(segment)
 
-
     recording_set = RecordingSet.from_recordings(recordings)
     supervision_set = SupervisionSet.from_segments(supervisions)
     validate_recordings_and_supervisions(recording_set, supervision_set)
@@ -168,17 +168,9 @@ def prepare_safet(
     if output_dir is not None:
         recording_set.to_json(output_dir / 'recordings.json')
         supervision_set.to_json(output_dir / 'supervisions.json')
-    return {
-        'recordings': recording_set,
-        'supervisions': supervision_set
-    }
 
-
-def main():
-  prepare_safet('/Users/ashisharora/Desktop/corpora/safet/LDC2020E10/',
-  '/Users/ashisharora/Desktop/corpora/safet/LDC2020E09/',
-  '/Users/ashisharora/Desktop/corpora')
-
-
-if __name__ == '__main__':
-  main()
+    manifests['train'] = {
+            'recordings': recording_set,
+            'supervisions': supervision_set
+        }
+    return manifests
