@@ -30,6 +30,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 import html
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Union
@@ -41,7 +42,6 @@ from lhotse.audio import AudioSource, Recording, RecordingSet
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, Seconds, urlretrieve_progress
 
-# fmt: off
 MEETINGS = {
     'EN2001': ['EN2001a', 'EN2001b', 'EN2001d', 'EN2001e'],
     'EN2002': ['EN2002a', 'EN2002b', 'EN2002c', 'EN2002d'],
@@ -105,35 +105,6 @@ MEETINGS = {
 }
 
 PARTITIONS = {
-    'scenario-only': {
-        'train': [meeting for session in [
-                'ES2002','ES2005','ES2006','ES2007','ES2008','ES2009','ES2010','ES2012','ES2013',
-                'ES2015','ES2016','IS1000','IS1001','IS1002','IS1003','IS1004','IS1005','IS1006',
-                'IS1007','TS3005','TS3008','TS3009','TS3010','TS3011','TS3012'
-            ] for meeting in MEETINGS[session] if meeting not in ['IS1002a','IS1005d']],
-        'dev': [meeting for session in [
-                'ES2003','ES2011','IS1008','TS3004','TS3006'
-            ] for meeting in MEETINGS[session]],
-        'test': [meeting for session in [
-                'ES2004','ES2014','IS1009','TS3003','TS3007'
-            ] for meeting in MEETINGS[session]]
-    },
-    'full-corpus': {
-        'train': [meeting for session in [
-                'ES2002','ES2005','ES2006','ES2007','ES2008','ES2009','ES2010','ES2012','ES2013',
-                'ES2015','ES2016','IS1000','IS1001','IS1002','IS1003','IS1004','IS1005','IS1006',
-                'IS1007','TS3005','TS3008','TS3009','TS3010','TS3011','TS3012','EN2001','EN2003',
-                'EN2004','EN2005','EN2006','EN2009','IN1001','IN1002','IN1005','IN1007','IN1008',
-                'IN1009','IN1012','IN1013','IN1014','IN1016'
-            ] for meeting in MEETINGS[session]],
-        'dev': [meeting for session in [
-                'ES2003','ES2011','IS1008','TS3004','TS3006','IB4001','IB4002','IB4003','IB4004',
-                'IB4010','IB4011'
-            ] for meeting in MEETINGS[session]],
-        'test': [meeting for session in [
-                'ES2004','ES2014','IS1009','TS3003','TS3007','EN2002'
-            ] for meeting in MEETINGS[session]]
-    },
     'full-corpus-asr': {
         'train': [meeting for session in [
                 'ES2002','ES2005','ES2006','ES2007','ES2008','ES2009','ES2010','ES2012','ES2013',
@@ -150,12 +121,7 @@ PARTITIONS = {
             ] for meeting in MEETINGS[session]]
     }
 }
-
-MICS = ['ihm','ihm-mix','sdm','mdm']
-MDM_ARRAYS = ['Array1','Array2']
-MDM_CHANNELS = ['01','02','03','04','05','06','07','08']
-# fmt: on
-
+MICS = ['ihm']
 
 def download_audio(
     target_dir: Path,
@@ -313,7 +279,7 @@ def parse_ami_annotations(
             cur_seg = list(annotations[key])[0]
             for seg in list(annotations[key])[1:]:
                 if seg.begin_time - cur_seg.end_time <= max_pause:
-                    cur_seg._replace(
+                    cur_seg = cur_seg._replace(
                         text=f"{cur_seg.text} {seg.text}", end_time=seg.end_time
                     )
                 else:
@@ -324,174 +290,13 @@ def parse_ami_annotations(
     return annotations
 
 
-# IHM and MDM audio requires grouping multiple channels of AudioSource into
-# one Recording.
-
-
-def prepare_audio_grouped(
-    audio_paths: List[Pathlike],
-) -> RecordingSet:
-    import soundfile as sf
-
-    # Group together multiple channels from the same session.
-    # We will use that to create a Recording with multiple sources (channels).
-    from cytoolz import groupby
-
-    channel_wavs = groupby(lambda p: p.parts[-3], audio_paths)
-
-    recordings = []
-    for session_name, channel_paths in channel_wavs.items():
-        audio_sf = sf.SoundFile(str(channel_paths[0]))
-
-        recordings.append(
-            Recording(
-                id=session_name,
-                sources=[
-                    AudioSource(type="file", channels=[idx], source=str(audio_path))
-                    for idx, audio_path in enumerate(sorted(channel_paths))
-                ],
-                sampling_rate=audio_sf.samplerate,
-                num_samples=audio_sf.frames,
-                duration=audio_sf.frames / audio_sf.samplerate,
-            )
-        )
-    return RecordingSet.from_recordings(recordings)
-
-
-# SDM and IHM-Mix settings do not require any grouping
-
-
-def prepare_audio_single(
-    audio_paths: List[Pathlike],
-) -> RecordingSet:
-    import soundfile as sf
-
-    recording_manifest = defaultdict(dict)
-
-    recordings = []
-    for audio_path in audio_paths:
-        session_name = audio_path.parts[-3]
-        audio_sf = sf.SoundFile(str(audio_path))
-        recordings.append(
-            Recording(
-                id=session_name,
-                sources=[
-                    AudioSource(
-                        type="file",
-                        channels=list(range(audio_sf.channels)),
-                        source=str(audio_path),
-                    )
-                ],
-                sampling_rate=audio_sf.samplerate,
-                num_samples=audio_sf.frames,
-                duration=audio_sf.frames / audio_sf.samplerate,
-            )
-        )
-    return RecordingSet.from_recordings(recordings)
-
-
-# For IHM mic, each headphone will have its own annotations, while for other mics
-# all sources have the same annotation
-
-
-def prepare_supervision_ihm(
-    audio: RecordingSet, annotations: Dict[str, List[AmiSegmentAnnotation]]
-) -> SupervisionSet:
-    # Create a mapping from a tuple of (session_id, channel) to the list of annotations.
-    # This way we can map the supervisions to the right channels in a multi-channel recording.
-    annotation_by_id_and_channel = {
-        (key[0], key[2]): annotations[key] for key in annotations
-    }
-
-    segments = []
-    for recording in audio:
-        # AMI IHM can have multiple audio sources for each recording
-        for source in recording.sources:
-            # For each source, "channels" will always be a one-element list
-            (channel,) = source.channels
-            annotation = annotation_by_id_and_channel.get((recording.id, channel))
-            if annotation is None:
-                logging.warning(
-                    f"No annotation found for recording {recording.id} "
-                    f"(file {source.source})"
-                )
-                continue
-
-            for seg_idx, seg_info in enumerate(annotation):
-                duration = seg_info.end_time - seg_info.begin_time
-                # Some annotations in IHM setting exceed audio duration, so we
-                # ignore such segments
-                if seg_info.end_time > recording.duration:
-                    logging.warning(
-                        f"Segment {recording.id}-{channel}-{seg_idx} exceeds "
-                        f"recording duration. Not adding to supervisions."
-                    )
-                    continue
-                if duration > 0:
-                    segments.append(
-                        SupervisionSegment(
-                            id=f"{recording.id}-{channel}-{seg_idx}",
-                            recording_id=recording.id,
-                            start=seg_info.begin_time,
-                            duration=duration,
-                            channel=channel,
-                            language="English",
-                            speaker=seg_info.speaker,
-                            gender=seg_info.gender,
-                            text=seg_info.text,
-                        )
-                    )
-
-    return SupervisionSet.from_segments(segments)
-
-
-def prepare_supervision_other(
-    audio: RecordingSet, annotations: Dict[str, List[AmiSegmentAnnotation]]
-) -> SupervisionSet:
-    annotation_by_id = {(key[0]): annot for key, annot in annotations.items()}
-
-    segments = []
-    for recording in audio:
-        annotation = annotation_by_id.get(recording.id)
-        # In these mic settings, all sources (1 for ihm-mix and sdm and 16 for mdm)
-        # will share supervision.
-        source = recording.sources[0]
-        if annotation is None:
-            logging.warning(f"No annotation found for recording {recording.id}")
-            continue
-
-        if len(source.channels) > 1:
-            logging.warning(
-                f"More than 1 channels in recording {recording.id}. "
-                f"Creating supervision for channel 0 only."
-            )
-
-        for seg_idx, seg_info in enumerate(annotation):
-            duration = seg_info.end_time - seg_info.begin_time
-            if duration > 0:
-                segments.append(
-                    SupervisionSegment(
-                        id=f"{recording.id}-{seg_idx}",
-                        recording_id=recording.id,
-                        start=seg_info.begin_time,
-                        duration=duration,
-                        channel=0,
-                        language="English",
-                        speaker=seg_info.speaker,
-                        gender=seg_info.gender,
-                        text=seg_info.text,
-                    )
-                )
-    return SupervisionSet.from_segments(segments)
-
-
 def prepare_ami(
     data_dir: Pathlike,
-    annotations_dir: Optional[Pathlike] = None,
-    output_dir: Optional[Pathlike] = None,
+    annotations_dir: Pathlike,
+    output_dir: Pathlike,
     mic: Optional[str] = "ihm",
-    partition: Optional[str] = "full-corpus",
-    max_pause: Optional[float] = 0.0,
+    partition: Optional[str] = "full-corpusi-asr",
+    max_pause: Optional[float] = 0.3,
 ) -> Dict[str, Dict[str, Union[RecordingSet, SupervisionSet]]]:
     """
     Returns the manifests which consist of the Recordings and Supervisions
@@ -502,12 +307,9 @@ def prepare_ami(
     :param max_pause: float (default = 0.0), max pause allowed between word segments to combine segments
     :return: a Dict whose key is ('train', 'dev', 'eval'), and the values are dicts of manifests under keys
         'recordings' and 'supervisions'.
-
-    The `partition` and `max_pause` must be chosen depending on the task. For example:
-    - Speaker diarization: set `partition="full-corpus"` and `max_pause=0`
-    - ASR: set `partition="full-corpus-asr"` and `max_pause=0.3` (or some value in the range 0.2-0.5)
     """
     data_dir = Path(data_dir)
+    annotations_dir = Path(annotations_dir)
     assert data_dir.is_dir(), f"No such directory: {data_dir}"
     assert mic in MICS, f"Mic {mic} not supported"
     assert partition in PARTITIONS, f"Partition {partition} not supported"
@@ -520,52 +322,73 @@ def prepare_ami(
     annotations = parse_ami_annotations(
         annotations_dir / "annotations.zip", max_pause=max_pause
     )
-
+    annotation_by_id_and_channel = {
+        (key[0], key[2]): annotations[key] for key in annotations
+    }
     # Audio
     logging.info("Preparing recording manifests")
     wav_dir = data_dir
-
-    if mic in ["ihm", "mdm"]:
-        audio_paths = (
-            wav_dir.rglob("*Headset-?.wav")
-            if mic == "ihm"
-            else wav_dir.rglob("*Array?-0?.wav")
-        )
-        audio = prepare_audio_grouped(list(audio_paths))
-    elif mic in ["ihm-mix", "sdm"]:
-        audio_paths = (
-            wav_dir.rglob("*Mix-Headset.wav")
-            if mic == "ihm-mix"
-            else wav_dir.rglob("*Array1-01.wav")
-        )
-        audio = prepare_audio_single(list(audio_paths))
-
+    audio_paths = (wav_dir.rglob("*Headset-?.wav"))
+    recordings = []
+    for audio_path in audio_paths:
+        recording = Recording.from_file(audio_path)
+        recordings.append(recording)
+    recording_set = RecordingSet.from_recordings(recordings)
     # Supervisions
     logging.info("Preparing supervision manifests")
-    supervision = (
-        prepare_supervision_ihm(audio, annotations)
-        if mic == "ihm"
-        else prepare_supervision_other(audio, annotations)
-    )
-
+    segments = []
+    for recording in recording_set:
+        source = recording.sources[0].source
+        channel = source.split('/')[-1].split('-')[-1].split('.')[0]
+        sessionid = recording.id.split('.')[0]
+        channel = int(channel.strip())
+        sessionid = str(sessionid.strip())
+        annotation = annotation_by_id_and_channel.get((sessionid, channel))
+        if annotation is None:
+            logging.warning(
+            f"No annotation found for recording {sessionid} "
+            f"(file {channel})")
+            continue
+        for seg_idx, seg_info in enumerate(annotation):
+            duration = seg_info.end_time - seg_info.begin_time
+            # Some annotations in IHM setting exceed audio duration, so we
+            # ignore such segments
+            if seg_info.end_time > recording.duration:
+                logging.warning(
+                    f"Segment {sessionid}-{channel}-{seg_idx} exceeds "
+                    f"recording duration. Not adding to supervisions."
+                )
+                continue
+            if duration > 0:
+                segments.append(
+                    SupervisionSegment(
+                        id=f"{sessionid}.Headset-{channel}-{seg_idx}",
+                        recording_id=f"{recording.id}",
+                        start=seg_info.begin_time,
+                        duration=duration,
+                        channel=0,
+                        language="English",
+                        speaker=seg_info.speaker,
+                        gender=seg_info.gender,
+                        text=seg_info.text,
+                    )
+                )
+    supervision_set = SupervisionSet.from_segments(segments)
+    validate_recordings_and_supervisions(recording_set, supervision_set)
     manifests = defaultdict(dict)
-
     dataset_parts = PARTITIONS[partition]
     for part in ["train", "dev", "test"]:
         # Get recordings for current data split
-        audio_part = audio.filter(lambda x: x.id in dataset_parts[part])
-        supervision_part = supervision.filter(
-            lambda x: x.recording_id in dataset_parts[part]
+        recording_part = recording_set.filter(lambda x: x.id.split('.')[0] in dataset_parts[part])
+        supervision_part = supervision_set.filter(
+            lambda x: x.recording_id.split('.')[0] in dataset_parts[part]
         )
 
         # Write to output directory if a path is provided
         if output_dir is not None:
-            audio_part.to_json(output_dir / f"recordings_{part}.json")
+            recording_part.to_json(output_dir / f"recordings_{part}.json")
             supervision_part.to_json(output_dir / f"supervisions_{part}.json")
-
-        validate_recordings_and_supervisions(audio_part, supervision_part)
-
+        validate_recordings_and_supervisions(recording_part, supervision_part)
         # Combine all manifests into one dictionary
-        manifests[part] = {"recordings": audio_part, "supervisions": supervision_part}
-
+        manifests[part] = {"recordings": recording_part, "supervisions": supervision_part}
     return dict(manifests)
