@@ -29,21 +29,13 @@ from lhotse.audio import Recording, RecordingSet
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, check_and_rglob, recursion_limit
 
-data_directories = {
-        'audio': ['LDC2020E10', 'LDC2019E37' 'LDC2019E53'],
-        'transcription': ['LDC2020E09', 'LDC2019E36', 'LDC2019E53']
-}
 
-PARTITIONS = {
-    'train': {
-        'audio': ['LDC2020E10', 'LDC2019E37'],
-        'transcription': ['LDC2020E09', 'LDC2019E36']
-    },
-    'dev':   {
-        'audio': ['LDC2019E53'],
-        'transcription': ['LDC2019E53']
-    }
-}
+WORDLIST = dict()
+IV_WORDS = dict()
+OOV_WORDS = dict()
+UNK = '<UNK>'
+REPLACE_UNKS = True
+
 
 def case_normalize(w):
     if w.startswith('~'):
@@ -53,6 +45,7 @@ def case_normalize(w):
 
 
 def process_transcript(transcript):
+    global WORDLIST
     tmp = re.sub(r'extreme\s+background', 'extreme_background', transcript)
     tmp = re.sub(r'foreign\s+lang=', 'foreign_lang=', tmp)
     tmp = re.sub(r'\)\)([^\s])', ')) \1', tmp)
@@ -97,12 +90,29 @@ def process_transcript(transcript):
     out_x = list()
     for w in x:
         w = case_normalize(w)
-        out_x.append(w)
+        if w in WORDLIST:
+            IV_WORDS[w] = 1 + IV_WORDS.get(w, 0)
+            out_x.append(w)
+        else:
+            OOV_WORDS[w] = 1 + OOV_WORDS.get(w, 0)
+            if REPLACE_UNKS:
+                out_x.append(UNK)
+            else:
+                out_x.append(w)
+
     return ' '.join(out_x)
+
+
+def read_lexicon_words(lexicon):
+    with open(lexicon, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = re.sub(r'(?s)\s.*', '', line)
+            WORDLIST[line] = 1
 
 
 def prepare_safet(
         corpus_dir: Pathlike,
+        lexicon_dir:Pathlike,
         output_dir: Optional[Pathlike] = None
 ) -> Dict[str, Union[RecordingSet, SupervisionSet]]:
     """
@@ -115,10 +125,13 @@ def prepare_safet(
     """
 
     corpus_dir = Path(corpus_dir)
+    lexicon_dir = Path(lexicon_dir)
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    lexicon = lexicon_dir / 'lexicon.txt'
+    read_lexicon_words(lexicon)
     dataset_parts = ['train', 'dev']
     manifests = defaultdict(dict)
     for part in dataset_parts:
