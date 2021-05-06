@@ -41,7 +41,7 @@ def case_normalize(w):
     if w.startswith('~'):
         return w.upper()
     else:
-        return w.lower()
+        return w.upper()
 
 
 def process_transcript(transcript):
@@ -130,9 +130,9 @@ def prepare_safet(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    lexicon = lexicon_dir / 'lexicon.txt'
+    lexicon = lexicon_dir / 'lexicon_raw_nosil.txt'
     read_lexicon_words(lexicon)
-    dataset_parts = ['train', 'dev']
+    dataset_parts = ['dev', 'train']
     manifests = defaultdict(dict)
     for part in dataset_parts:
         recordings = []
@@ -168,8 +168,10 @@ def prepare_safet(
                     duration = end_time - start_time - 0.1
                     speaker_id = line_parts[2][:-1]
                     transcription = " ".join(line_parts[3:])
-                    #cleaned_transcrition = transcription
-                    cleaned_transcrition = process_transcript(transcription)
+                    if part == 'dev':
+                        cleaned_transcrition = transcription
+                    else:
+                        cleaned_transcrition = process_transcript(transcription)
                     # do not use utterances which have empty cleaned transcript
                     if not cleaned_transcrition:
                         continue
