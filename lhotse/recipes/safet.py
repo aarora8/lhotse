@@ -132,7 +132,7 @@ def prepare_safet(
 
     lexicon = lexicon_dir / 'lexicon_raw_nosil.txt'
     read_lexicon_words(lexicon)
-    dataset_parts = ['dev', 'train']
+    dataset_parts = ['dev', 'dev_clean', 'train']
     manifests = defaultdict(dict)
     for part in dataset_parts:
         recordings = []
@@ -140,8 +140,12 @@ def prepare_safet(
         supervision_id = 0
         # create recordings list with sampling_rate, num_samples
         # duration, location and id.
-        wav_dir = corpus_dir / f'{part}' / 'audio_dir'
-        transcript_dir = corpus_dir / f'{part}' / 'transcript_dir'
+        if 'dev' in part:
+            wav_dir = corpus_dir / f'{dev}' / 'audio_dir'
+            transcript_dir = corpus_dir / f'{dev}' / 'transcript_dir'
+        else:
+            wav_dir = corpus_dir / f'{part}' / 'audio_dir'
+            transcript_dir = corpus_dir / f'{part}' / 'transcript_dir'
         audio_paths = check_and_rglob(wav_dir, '*.wav')
         for audio_path in audio_paths:
           recording = Recording.from_file(audio_path)
@@ -154,7 +158,7 @@ def prepare_safet(
         for transcript_path in transcript_paths:
             # get basename of the file and add '_mixed' suffix to it
             # (this is also the recording_id)
-            if part == 'dev':
+            if 'dev' in part:
                 recording_id = Path(transcript_path).stem + '_dev_mixed'
             else:
                 recording_id = Path(transcript_path).stem + '_mixed'
@@ -168,7 +172,7 @@ def prepare_safet(
                     duration = end_time - start_time - 0.1
                     speaker_id = line_parts[2][:-1]
                     transcription = " ".join(line_parts[3:])
-                    if part == 'dev':
+                    if part == 'dev_clean':
                         cleaned_transcrition = transcription
                     else:
                         cleaned_transcrition = process_transcript(transcription)
