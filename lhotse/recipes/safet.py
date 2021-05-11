@@ -31,74 +31,51 @@ from lhotse.utils import Pathlike, check_and_rglob, recursion_limit
 
 
 WORDLIST = dict()
-IV_WORDS = dict()
-OOV_WORDS = dict()
 UNK = '<UNK>'
 REPLACE_UNKS = True
 
-
 def case_normalize(w):
+    # this is for POI
+    # but we should add it into the lexicon
     if w.startswith('~'):
         return w.upper()
     else:
         return w.upper()
 
-
 def process_transcript(transcript):
     global WORDLIST
-    tmp = re.sub(r'extreme\s+background', 'extreme_background', transcript)
+    # https://www.programiz.com/python-programming/regex
+    # [] for set of characters you with to match
+    # eg. [abc] --> will search for a or b or c
+    # "." matches any single character
+    # "$" to check if string ends with a certain character 
+    # eg. "a$" should end with "a"
+    # replace <extreme background> with <extreme_background>
+    # replace <foreign lang="Spanish">fuego</foreign> with foreign_lang=
+    # remove "[.,!?]"
+    # remove " -- "
+    # remove " --" --> strings that ends with "-" and starts with " "
+    # \s+ markers are – that means “any white space character, one or more times”
+    tmp = re.sub(r'<extreme background>', '', transcript)
+    tmp = re.sub(r'<background>', '', transcript)
     tmp = re.sub(r'foreign\s+lang=', 'foreign_lang=', tmp)
-    tmp = re.sub(r'\)\)([^\s])', ')) \1', tmp)
+    tmp = re.sub(r'\(\(', '', tmp)
+    tmp = re.sub(r'\)\)', '', tmp)
     tmp = re.sub(r'[.,!?]', ' ', tmp)
     tmp = re.sub(r' -- ', ' ', tmp)
     tmp = re.sub(r' --$', '', tmp)
     x = re.split(r'\s+', tmp)
-    old_x = x
-    x = list()
-
-    w = old_x.pop(0)
-    while old_x:
-        if w.startswith(r'(('):
-            while old_x and not w.endswith('))'):
-                w2 = old_x.pop(0)
-                w += ' ' + w2
-            x.append(w)
-            if old_x:
-                w = old_x.pop(0)
-        elif w.startswith(r'<'):
-            #this is very simplified and assumes we will not get a starting tag
-            #alone
-            while old_x and not w.endswith('>'):
-                w2 = old_x.pop(0)
-                w += ' ' + w2
-            x.append(w)
-            if old_x:
-                w = old_x.pop(0)
-        elif w.endswith(r'))'):
-            if old_x:
-                w = old_x.pop(0)
-        else:
-            x.append(w)
-            if old_x:
-                w = old_x.pop(0)
-
-    if not x:
-        return None
-    if len(x) == 1 and x[0] in ('<background>', '<extreme_background>'):
-        return None
 
     out_x = list()
     for w in x:
+        w = w.strip()
         w = case_normalize(w)
-        if w in WORDLIST:
-            IV_WORDS[w] = 1 + IV_WORDS.get(w, 0)
+        if w == "":
+            continue
+        elif w in WORDLIST:
             out_x.append(w)
         else:
-            OOV_WORDS[w] = 1 + OOV_WORDS.get(w, 0)
-            if REPLACE_UNKS:
-                out_x.append(UNK)
-            else:
-                out_x.append(w)
+            out_x.append(UNK)
 
     return ' '.join(out_x)
 
@@ -141,8 +118,8 @@ def prepare_safet(
         # create recordings list with sampling_rate, num_samples
         # duration, location and id.
         if 'dev' in part:
-            wav_dir = corpus_dir / f'{dev}' / 'audio_dir'
-            transcript_dir = corpus_dir / f'{dev}' / 'transcript_dir'
+            wav_dir = corpus_dir / 'dev' / 'audio_dir'
+            transcript_dir = corpus_dir / 'dev' / 'transcript_dir'
         else:
             wav_dir = corpus_dir / f'{part}' / 'audio_dir'
             transcript_dir = corpus_dir / f'{part}' / 'transcript_dir'
@@ -180,7 +157,7 @@ def prepare_safet(
                     if not cleaned_transcrition:
                         continue
                     # do not use utterances which do not have speaker label
-                    if 'background' in speaker_id:
+                    if speaker_id.startswith('background'):
                         continue
                     supervision_id += 1
                     segment = SupervisionSegment(
@@ -191,7 +168,7 @@ def prepare_safet(
                         channel=0,
                         language='English',
                         speaker=speaker_id,
-                        text=cleaned_transcrition.strip()
+                        text=cleaned_transcrition
                     )
                     supervisions.append(segment)
         recording_set = RecordingSet.from_recordings(recordings)
