@@ -44,6 +44,7 @@ def case_normalize(w):
 
 def process_transcript(transcript):
     global WORDLIST
+    if_only_unk = True
     # https://www.programiz.com/python-programming/regex
     # [] for set of characters you with to match
     # eg. [abc] --> will search for a or b or c
@@ -64,20 +65,23 @@ def process_transcript(transcript):
     tmp = re.sub(r'[.,!?]', ' ', tmp)
     tmp = re.sub(r' -- ', ' ', tmp)
     tmp = re.sub(r' --$', '', tmp)
-    x = re.split(r'\s+', tmp)
+    list_words = re.split(r'\s+', tmp)
 
-    out_x = list()
-    for w in x:
+    out_list_words = list()
+    for w in list_words:
         w = w.strip()
         w = case_normalize(w)
         if w == "":
             continue
         elif w in WORDLIST:
-            out_x.append(w)
+            out_list_words.append(w)
+            if_only_unk = False
         else:
-            out_x.append(UNK)
+            out_list_words.append(UNK)
 
-    return ' '.join(out_x)
+    if if_only_unk:
+        out_list_words = ''
+    return ' '.join(out_list_words)
 
 
 def read_lexicon_words(lexicon):
@@ -149,7 +153,7 @@ def prepare_safet(
                     duration = end_time - start_time - 0.1
                     speaker_id = line_parts[2][:-1]
                     transcription = " ".join(line_parts[3:])
-                    if part == 'dev_clean':
+                    if part == 'dev':
                         cleaned_transcrition = transcription
                     else:
                         cleaned_transcrition = process_transcript(transcription)
