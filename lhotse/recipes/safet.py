@@ -179,8 +179,8 @@ def prepare_safet(
         supervision_set = SupervisionSet.from_segments(supervisions)
         validate_recordings_and_supervisions(recording_set, supervision_set)
         if output_dir is not None:
-            supervision_set.to_json(output_dir / f'supervisions_{part}.json')
-            recording_set.to_json(output_dir / f'recordings_{part}.json')
+            supervision_set.to_json(output_dir / f'supervisions_safet_{part}.json')
+            recording_set.to_json(output_dir / f'recordings_safet_{part}.json')
         manifests[part] = {
                 'recordings': recording_set,
                 'supervisions': supervision_set
