@@ -164,8 +164,11 @@ def prepare_safet(
                     if speaker_id.startswith('background'):
                         continue
                     supervision_id += 1
+                    speaker_id = str(speaker_id).zfill(6)
+                    supervision_id_str = str(supervision_id).zfill(6)
+                    uttid =f'{speaker_id}_{supervision_id_str}'
                     segment = SupervisionSegment(
-                        id=supervision_id,
+                        id=uttid,
                         recording_id=recording_id,
                         start=float(start_time),
                         duration=duration,
