@@ -315,6 +315,10 @@ class SingleCutSampler(CutSampler):
                     # and return the cut anyway.
                     warnings.warn("The first cut drawn in batch collection violates the max_frames or max_cuts "
                                   "constraints - we'll return it anyway. Consider increasing max_frames/max_cuts.")
+                    #print("my line number is 318")
+                    #print(self.data_source[self.cut_idx])
+                    #print(next_num_cuts)
+                    #print(self.time_constraint)
                     cut_ids.append(next_cut.id)
                     self.cut_idx += 1
         return cut_ids
@@ -423,6 +427,9 @@ class CutPairsSampler(CutSampler):
                     # and return the cut anyway.
                     warnings.warn("The first cut drawn in batch collection violates one of the max_... constraints"
                                   "we'll return it anyway. Consider increasing max_source_frames/max_cuts/etc.")
+                    #print("my line number is 428")
+                    #print(self.source_constraints)
+                    #print(self.target_constraints)
                     cut_ids.append(next_source_cut.id)
                     self.cut_idx += 1
         return cut_ids
