@@ -1,11 +1,11 @@
-from typing import Type
+from typing import Dict, List, Optional, Type
 
 from lhotse import AudioSource
 from lhotse.audio import Recording, RecordingSet
-from lhotse.cut import Cut, CutSet
+from lhotse.cut import CutSet, MonoCut
 from lhotse.features import FeatureSet, Features
 from lhotse.manipulation import Manifest
-from lhotse.supervision import SupervisionSegment, SupervisionSet
+from lhotse.supervision import AlignmentItem, SupervisionSegment, SupervisionSet
 from lhotse.utils import fastcopy
 
 
@@ -35,13 +35,33 @@ def dummy_recording(unique_id: int) -> Recording:
     )
 
 
-def dummy_supervision(unique_id: int, start: float = 0.0, duration: float = 1.0, text: str = "irrelevant") -> SupervisionSegment:
+def dummy_alignment(text: str = "irrelevant", start: float = 0.0, duration: float = 1.0) -> AlignmentItem:
+    subwords = [text[i:i+3] for i in range(0, len(text), 3)]   # Create subwords of 3 chars
+    dur = duration/len(subwords)
+    alignment = [
+        AlignmentItem(
+            symbol=sub,
+            start=start + i*dur,
+            duration=dur
+        ) for i, sub in enumerate(subwords)    
+    ]
+    return {'subword': alignment}
+
+
+def dummy_supervision(
+    unique_id: int,
+    start: float = 0.0,
+    duration: float = 1.0,
+    text: str = "irrelevant",
+    alignment: Optional[Dict[str, List[AlignmentItem]]] = dummy_alignment()
+) -> SupervisionSegment:
     return SupervisionSegment(
         id=f'dummy-segment-{unique_id:04d}',
         recording_id=f'dummy-recording-{unique_id:04d}',
         start=start,
         duration=duration,
-        text=text
+        text=text,
+        alignment=alignment
     )
 
 
@@ -63,7 +83,7 @@ def dummy_features(unique_id: int) -> Features:
 
 
 def dummy_cut(unique_id: int, start: float = 0.0, duration: float = 1.0, supervisions=None):
-    return Cut(
+    return MonoCut(
         id=f'dummy-cut-{unique_id:04d}',
         start=start,
         duration=duration,

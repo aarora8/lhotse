@@ -20,7 +20,7 @@ import sphinx_rtd_theme
 # -- Project information -----------------------------------------------------
 
 project = 'lhotse'
-copyright = '2020, Lhotse development team'
+copyright = '2020-2021, Lhotse development team'
 author = 'Lhotse development team'
 
 # The full version, including alpha/beta/rc tags
@@ -33,9 +33,10 @@ release = '0.1'
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
+    'sphinx.ext.viewcode',
     'sphinx_rtd_theme',
     'sphinx_click.ext',
-    'sphinx_autodoc_typehints'
+    'sphinx_autodoc_typehints',
 ]
 
 # Add any paths that contain templates here, relative to this directory.

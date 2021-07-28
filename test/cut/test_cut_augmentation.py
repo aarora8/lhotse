@@ -1,6 +1,6 @@
 import pytest
 
-from lhotse import AudioSource, Cut, CutSet, Recording, SupervisionSegment
+from lhotse import AudioSource, CutSet, MonoCut, Recording, SupervisionSegment
 from lhotse.cut import PaddingCut
 
 
@@ -16,7 +16,7 @@ def recording(file_source):
 
 @pytest.fixture
 def cut_with_supervision(recording):
-    return Cut(
+    return MonoCut(
         id='cut',
         start=0.0,
         duration=0.5,
@@ -79,9 +79,27 @@ def test_cut_perturb_speed09(cut_with_supervision):
     assert recording_samples.shape[1] == 4444
 
 
+def test_cut_set_perturb_speed_doesnt_duplicate_transforms(cut_with_supervision):
+    cuts = CutSet.from_cuts([cut_with_supervision, cut_with_supervision.with_id('other-id')])
+    cuts_sp = cuts.perturb_speed(1.1)
+    for cut in cuts_sp:
+        # This prevents a bug regression where multiple cuts referencing the same recording would
+        # attach transforms to the same manifest
+        assert len(cut.recording.transforms) == 1
+
+
+def test_cut_set_resample_doesnt_duplicate_transforms(cut_with_supervision):
+    cuts = CutSet.from_cuts([cut_with_supervision, cut_with_supervision.with_id('other-id')])
+    cuts_sp = cuts.resample(44100)
+    for cut in cuts_sp:
+        # This prevents a bug regression where multiple cuts referencing the same recording would
+        # attach transforms to the same manifest
+        assert len(cut.recording.transforms) == 1
+
+
 @pytest.fixture
 def cut_with_supervision_start01(recording):
-    return Cut(
+    return MonoCut(
         id='cut_start01',
         start=0.1,
         duration=0.4,
@@ -181,3 +199,54 @@ def test_cut_set_perturb(cut_with_supervision, cut_with_supervision_start01):
         samples = cut_sp.load_audio()
         assert samples.shape[1] == cut_sp.num_samples
         assert samples.shape[1] < cut.num_samples
+
+
+@pytest.fixture()
+def resampling_cuts(cut_with_supervision, cut_with_supervision_start01):
+    return CutSet.from_cuts([cut_with_supervision, cut_with_supervision_start01])
+
+
+@pytest.mark.parametrize('cut_id', ['cut', 'cut_start01'])
+def test_resample_cut(resampling_cuts, cut_id):
+    original = resampling_cuts[cut_id]
+    resampled = original.resample(16000)
+    assert original.sampling_rate == 8000
+    assert resampled.sampling_rate == 16000
+    assert resampled.num_samples == 2 * original.num_samples
+    samples = resampled.load_audio()
+    assert samples.shape[1] == resampled.num_samples
+
+
+def test_resample_padding_cut():
+    original = PaddingCut(id='cut', duration=5.75, sampling_rate=16000, feat_value=1e-10, num_samples=92000)
+    resampled = original.resample(8000)
+    assert resampled.sampling_rate == 8000
+    assert resampled.num_samples == original.num_samples / 2
+    samples = resampled.load_audio()
+    assert samples.shape[1] == resampled.num_samples
+
+
+def test_resample_mixed_cut(cut_with_supervision_start01):
+    original = cut_with_supervision_start01.append(cut_with_supervision_start01)
+    resampled = original.resample(16000)
+    assert original.sampling_rate == 8000
+    assert resampled.sampling_rate == 16000
+    assert resampled.num_samples == 2 * original.num_samples
+    samples = resampled.load_audio()
+    assert samples.shape[1] == resampled.num_samples
+
+
+@pytest.mark.parametrize('affix_id', [True, False])
+def test_resample_cut_set(resampling_cuts, affix_id):
+    resampled_cs = resampling_cuts.resample(16000, affix_id=affix_id)
+    for original, resampled in zip(resampling_cuts, resampled_cs):
+        if affix_id:
+            assert original.id != resampled.id
+            assert resampled.id.endswith('_rs16000')
+        else:
+            assert original.id == resampled.id
+        assert original.sampling_rate == 8000
+        assert resampled.sampling_rate == 16000
+        assert resampled.num_samples == 2 * original.num_samples
+        samples = resampled.load_audio()
+        assert samples.shape[1] == resampled.num_samples

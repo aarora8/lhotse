@@ -4,7 +4,7 @@ import torch
 
 from lhotse import validate
 from lhotse.cut import CutSet
-from lhotse.dataset.input_strategies import InputStrategy, PrecomputedFeatures
+from lhotse.dataset.input_strategies import BatchIO, PrecomputedFeatures
 from lhotse.utils import ifnone
 
 
@@ -16,8 +16,8 @@ class VadDataset(torch.utils.data.Dataset):
     .. code-block::
 
         {
-            'features': (B x T x F) tensor
-            'features_lens': (B,) tensor
+            'inputs': (B x T x F) tensor
+            'input_lens': (B,) tensor
             'is_voice': (T x 1) tensor
             'cut': List[Cut]
         }
@@ -26,7 +26,7 @@ class VadDataset(torch.utils.data.Dataset):
     def __init__(
             self,
             cuts: CutSet,
-            input_strategy: InputStrategy = PrecomputedFeatures(),
+            input_strategy: BatchIO = PrecomputedFeatures(),
             cut_transforms: Sequence[Callable[[CutSet], CutSet]] = None,
             input_transforms: Sequence[Callable[[torch.Tensor], torch.Tensor]] = None
     ) -> None:

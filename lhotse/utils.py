@@ -1,6 +1,7 @@
 import math
 import random
 import uuid
+import logging
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from decimal import Decimal, ROUND_HALF_DOWN, ROUND_HALF_UP
@@ -11,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 import numpy as np
 import torch
 from tqdm.auto import tqdm
+from typing_extensions import Literal
 
 Pathlike = Union[Path, str]
 T = TypeVar('T')
@@ -27,6 +29,72 @@ LOG_EPSILON = math.log(EPSILON)
 # Python's uuid module is not affected by the ``random.seed(value)`` call,
 # so we work around it to provide deterministic ID generation when requested.
 _lhotse_uuid: Optional[Callable] = None
+
+
+class SmartOpen:
+    """Wrapper class around smart_open.open method
+
+    The smart_open.open attributes are cached as classed attributes - they play the role of singleton pattern.
+
+    The SmartOpen.setup method is intended for initial setup.
+    It imports the `open` method from the optional `smart_open` Python package,
+    and sets the parameters which are shared between all calls of the `smart_open.open` method.
+
+    If you do not call the setup method it is called automatically in SmartOpen.open with the provided parameters.
+
+    The example demonstrates that instantiating S3 `session.client` once,
+    instead using the defaults and leaving the smart_open creating it every time
+    has dramatic performance benefits.
+
+    Example::
+
+        >>> import boto3
+        >>> session = boto3.Session()
+        >>> client = session.client('s3')
+        >>> from lhotse.utils import SmartOpen
+        >>>
+        >>> if not slow:
+        >>>     # Reusing a single client speeds up the smart_open.open calls
+        >>>     SmartOpen.setup(transport_params=dict(client=client))
+        >>>
+        >>> # Simulating SmartOpen usage as in Lhotse data structures: AudioSource, Features, etc.
+        >>> for i in range(1000):
+        >>>     SmartOpen.open(s3_url, 'rb') as f:
+        >>>         source = f.read()
+    """
+    transport_params: Optional[Dict] = None
+    compression: Optional[str] = None
+    import_err_msg = ("Please do 'pip install smart_open' - "
+                      "if you are using S3/GCP/Azure/other cloud-specific URIs, do "
+                      "'pip install smart_open[s3]' (or smart_open[gcp], etc.) instead.")
+    smart_open: Optional[Callable] = None
+
+    @classmethod
+    def setup(
+            cls,
+            compression: Optional[str]=None,
+            transport_params: Optional[dict]= None):
+        try:
+            from smart_open import open as sm_open
+        except ImportError:
+            raise ImportError(cls.import_err_msg)
+        if cls.transport_params is not None and cls.transport_params != transport_params:
+            logging.warning(f'SmartOpen.setup second call overwrites existing transport_params with new version'
+                    f'\t\n{cls.transport_params}\t\nvs\t\n{transport_params}')
+        if cls.compression is not None and cls.compression != compression:
+            logging.warning(f'SmartOpen.setup second call overwrites existing compression param with new version'
+                    f'\t\n{cls.compression} vs {compression}')
+        cls.transport_params = transport_params
+        cls.compression = compression
+        cls.smart_open = sm_open
+
+    @classmethod
+    def open(cls, uri, mode='rb', compression=None, transport_params=None, **kwargs):
+        if cls.smart_open is None:
+            cls.setup(compression=compression, transport_params=transport_params)
+        compression = compression if compression else cls.compression
+        transport_params = transport_params if transport_params else cls.transport_params
+        return cls.smart_open(uri, mode=mode, compression=compression, transport_params=transport_params, **kwargs)
 
 
 def fix_random_seed(random_seed: int):
@@ -59,7 +127,6 @@ def asdict_nonull(dclass) -> Dict[str, Any]:
     Recursively convert a dataclass into a dict, removing all the fields with `None` value.
     Intended to use in place of dataclasses.asdict(), when the null values are not desired in the serialized document.
     """
-
     def non_null_dict_factory(collection):
         d = dict(collection)
         remove_keys = []
@@ -107,16 +174,17 @@ def time_diff_to_num_frames(time_diff: Seconds, frame_length: Seconds, frame_shi
     return int(ceil((time_diff - frame_length) / frame_shift))
 
 
-def check_and_rglob(path: Pathlike, pattern: str) -> List[Path]:
+def check_and_rglob(path: Pathlike, pattern: str, strict: Optional[bool] = True) -> List[Path]:
     """
     Asserts that ``path`` exists, is a directory and contains at least one file satisfying the ``pattern``.
+    If `strict` is False, then zero matches are allowed.
 
     :returns: a list of paths to files matching the ``pattern``.
     """
     path = Path(path)
     assert path.is_dir(), f'No such directory: {path}'
     matches = sorted(path.rglob(pattern))
-    assert len(matches) > 0, f'No files matching pattern "{pattern}" in directory: {path}'
+    assert len(matches) > 0 or not strict, f'No files matching pattern "{pattern}" in directory: {path}'
     return matches
 
 
@@ -153,7 +221,12 @@ def fastcopy(dataclass_obj: T, **kwargs) -> T:
     return type(dataclass_obj)(**{**dataclass_obj.__dict__, **kwargs})
 
 
-def split_sequence(seq: Sequence[Any], num_splits: int, shuffle: bool = False) -> List[List[Any]]:
+def split_sequence(
+        seq: Sequence[Any],
+        num_splits: int,
+        shuffle: bool = False,
+        drop_last: bool = False
+) -> List[List[Any]]:
     """
     Split a sequence into ``num_splits`` equal parts. The element order can be randomized.
     Raises a ``ValueError`` if ``num_splits`` is larger than ``len(seq)``.
@@ -161,6 +234,10 @@ def split_sequence(seq: Sequence[Any], num_splits: int, shuffle: bool = False) -
     :param seq: an input iterable (can be a Lhotse manifest).
     :param num_splits: how many output splits should be created.
     :param shuffle: optionally shuffle the sequence before splitting.
+    :param drop_last: determines how to handle splitting when ``len(seq)`` is not divisible
+        by ``num_splits``. When ``False`` (default), the splits might have unequal lengths.
+        When ``True``, it may discard the last element in some splits to ensure they are
+        equally long.
     :return: a list of length ``num_splits`` containing smaller lists (the splits).
     """
     seq = list(seq)
@@ -169,48 +246,42 @@ def split_sequence(seq: Sequence[Any], num_splits: int, shuffle: bool = False) -
         raise ValueError(f"Cannot split iterable into more chunks ({num_splits}) than its number of items {num_items}")
     if shuffle:
         random.shuffle(seq)
-    chunk_size = int(ceil(num_items / num_splits))
-    split_indices = [(i * chunk_size, min(num_items, (i + 1) * chunk_size)) for i in range(num_splits)]
-    return [seq[begin: end] for begin, end in split_indices]
+    chunk_size = num_items // num_splits
+
+    num_shifts = num_items % num_splits
+    if drop_last:
+        # Equally-sized splits; discards the remainder by default, no shifts are needed
+        end_shifts = [0] * num_splits
+        begin_shifts = [0] * num_splits
+    else:
+        # Non-equally sized splits; need to shift the indices like:
+        # [0, 10] -> [0, 11]    (begin_shift=0, end_shift=1)
+        # [10, 20] -> [11, 22]  (begin_shift=1, end_shift=2)
+        # [20, 30] -> [22, 32]  (begin_shift=2, end_shift=2)
+        # for num_items=32 and num_splits=3
+        end_shifts = list(range(1, num_shifts + 1)) + [num_shifts] * (num_splits - num_shifts)
+        begin_shifts = [0] + end_shifts[:-1]
+
+    split_indices = [
+        [i * chunk_size + begin_shift, (i + 1) * chunk_size + end_shift]
+        for i, begin_shift, end_shift in zip(range(num_splits), begin_shifts, end_shifts)
+    ]
+    splits = [seq[begin:end] for begin, end in split_indices]
+    return splits
 
 
 def compute_num_frames(
         duration: Seconds,
         frame_shift: Seconds,
         sampling_rate: int,
-        # rounding: str = ROUND_HALF_DOWN#ROUND_HALF_UP
 ) -> int:
     """
     Compute the number of frames from duration and frame_shift in a safe way.
-
-    The need for this function is best illustrated with an example edge case:
-
-    >>> duration = 16.165
-    >>> frame_shift = 0.01
-    >>> num_frames = duration / frame_shift  # we expect it to finally be 1617
-    >>> num_frames
-      1616.4999999999998
-    >>> round(num_frames)
-      1616
-    >>> Decimal(num_frames).quantize(0, rounding=ROUND_HALF_UP)
-      1616
-    >>> round(num_frames, ndigits=8)
-      1616.5
-    >>> Decimal(round(num_frames, ndigits=8)).quantize(0, rounding=ROUND_HALF_UP)
-      1617
     """
     num_samples = round(duration * sampling_rate)
     window_hop = round(frame_shift * sampling_rate)
     num_frames = int((num_samples + window_hop // 2) // window_hop)
     return num_frames
-    # return int(
-    #     Decimal(
-    #         # 8 is a good number because cases like 14.49175 still work correctly,
-    #         # while problematic cases like 14.49999999998 are typically breaking much later than 8th decimal
-    #         # with double-precision floats.
-    #         round((duration + frame_shift / 2) / frame_shift, ndigits=8)
-    #     ).quantize(0, rounding=rounding)
-    # )
 
 
 def during_docs_build() -> bool:
@@ -304,6 +375,42 @@ def compute_num_samples(duration: Seconds, sampling_rate: int, rounding=ROUND_HA
             round(duration * sampling_rate, ndigits=8)
         ).quantize(0, rounding=rounding)
     )
+
+
+def compute_start_duration_for_extended_cut(
+        start: Seconds,
+        duration: Seconds,
+        new_duration: Seconds,
+        direction: Literal['center', 'left', 'right', 'random'] = 'center',
+) -> Tuple[Seconds, Seconds]:
+    """
+    Compute the new value of "start" for a time interval characterized by ``start`` and ``duration``
+    that is being extended to ``new_duration`` towards ``direction``.
+    :return: a new value of ``start`` and ``new_duration`` -- adjusted for possible negative start.
+    """
+
+    if new_duration <= duration:
+        # New duration is shorter; do nothing.
+        return start, duration
+
+    if direction == 'center':
+        new_start = start - (new_duration - duration) / 2
+    elif direction == 'left':
+        new_start = start - (new_duration - duration)
+    elif direction == 'right':
+        new_start = start
+    elif direction == 'random':
+        new_start = random.uniform(start - (new_duration - duration), start)
+    else:
+        raise ValueError(f"Unexpected direction: {direction}")
+
+    if new_start < 0:
+        # We exceeded the start of the recording.
+        # We'll decrease the new_duration by the negative offset.
+        new_duration = round(new_duration + new_start, ndigits=15)
+        new_start = 0
+
+    return round(new_start, ndigits=15), new_duration
 
 
 def index_by_id_and_check(manifests: Iterable[T]) -> Dict[str, T]:
@@ -415,3 +522,7 @@ def lens_to_mask(lens: torch.IntTensor) -> torch.Tensor:
     for i, num in enumerate(lens):
         mask[i, :num] = 1.0
     return mask
+
+
+class NonPositiveEnergyError(ValueError):
+    pass

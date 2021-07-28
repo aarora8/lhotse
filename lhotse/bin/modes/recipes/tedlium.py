@@ -1,7 +1,7 @@
 import click
 
-from lhotse.bin.modes import obtain, prepare
-from lhotse.recipes.tedlium import download_and_untar, prepare_tedlium
+from lhotse.bin.modes import download, prepare
+from lhotse.recipes.tedlium import download_tedlium, prepare_tedlium
 from lhotse.utils import Pathlike
 
 
@@ -18,10 +18,10 @@ def tedlium(
     prepare_tedlium(tedlium_root=tedlium_dir, output_dir=output_dir)
 
 
-@obtain.command()
+@download.command()
 @click.argument('target_dir', type=click.Path())
 def tedlium(
         target_dir: Pathlike
 ):
     """TED-LIUM v3 download (approx. 11GB)."""
-    download_and_untar(target_dir)
+    download_tedlium(target_dir)

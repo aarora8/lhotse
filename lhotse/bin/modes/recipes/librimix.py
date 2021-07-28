@@ -1,7 +1,7 @@
 import click
 
-from lhotse.bin.modes import obtain, prepare
-from lhotse.recipes.librimix import download_and_unzip, prepare_librimix
+from lhotse.bin.modes import download, prepare
+from lhotse.recipes.librimix import download_librimix, prepare_librimix
 from lhotse.utils import Pathlike
 
 __all__ = ['librimix']
@@ -36,10 +36,10 @@ def librimix(
     )
 
 
-@obtain.command(context_settings=dict(show_default=True))
+@download.command(context_settings=dict(show_default=True))
 @click.argument('target_dir', type=click.Path())
 def librimix(
         target_dir: Pathlike
 ):
     """Mini LibriMix download."""
-    download_and_unzip(target_dir)
+    download_librimix(target_dir)

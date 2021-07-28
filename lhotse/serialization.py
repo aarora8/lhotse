@@ -1,6 +1,7 @@
 import gzip
 import itertools
 import json
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Generator, Iterable, Optional, Type, Union
@@ -93,6 +94,89 @@ def load_jsonl(path: Pathlike) -> Generator[Dict[str, Any], None, None]:
             yield ret
 
 
+class SequentialJsonlWriter:
+    """
+    SequentialJsonlWriter allows to store the manifests one by one,
+    without the necessity of storing the whole manifest set in-memory.
+    Supports writing to JSONL format (``.jsonl``), with optional gzip
+    compression (``.jsonl.gz``).
+
+    Example:
+
+        >>> from lhotse import RecordingSet
+        ... recordings = [...]
+        ... with RecordingSet.open_writer('recordings.jsonl.gz') as writer:
+        ...     for recording in recordings:
+        ...         writer.write(recording)
+
+    This writer can be useful for continuing to write files that were previously
+    stopped -- it will open the existing file and scan it for item IDs to skip
+    writing them later. It can also be quried for existing IDs so that the user
+    code may skip preparing the corresponding manifets.
+
+    Example:
+
+        >>> from lhotse import RecordingSet, Recording
+        ... with RecordingSet.open_writer('recordings.jsonl.gz') as writer:
+        ...     for path in Path('.').rglob('*.wav'):
+        ...         recording_id = path.stem
+        ...         if writer.contains(recording_id):
+        ...             # Item already written previously - skip processing.
+        ...             continue
+        ...         # Item doesn't exist yet - run extra work to prepare the manifest
+        ...         # and store it.
+        ...         recording = Recording.from_file(path, recording_id=recording_id)
+        ...         writer.write(recording)
+    """
+
+    def __init__(self, path: Pathlike, overwrite: bool = False) -> None:
+        self.path = Path(path)
+        assert extension_contains('.jsonl', self.path)
+        self.compressed = extension_contains('.gz', self.path)
+        self._open = gzip.open if self.compressed else open
+        self.mode = 'wt' if self.compressed else 'w'
+        self.ignore_ids = set()
+        if self.path.is_file() and not overwrite:
+            self.mode = 'at' if self.compressed else 'a'
+            with self._open(self.path) as f:
+                self.ignore_ids = {data['id'] for data in (json.loads(line) for line in f) if 'id' in data}
+
+    def __enter__(self) -> 'SequentialJsonlWriter':
+        self.file = self._open(self.path, self.mode)
+        return self
+
+    def __exit__(self, *args, **kwargs) -> None:
+        self.file.close()
+
+    def __contains__(self, item: Union[str, Any]) -> bool:
+        if isinstance(item, str):
+            return item in self.ignore_ids
+        try:
+            return item.id in self.ignore_ids
+        except AttributeError:
+            # The only case when this happens is for the FeatureSet -- Features do not have IDs.
+            # In that case we can't know if they are already written or not.
+            return False
+
+    def contains(self, item: Union[str, Any]) -> bool:
+        return item in self
+
+    def write(self, manifest) -> None:
+        """
+        Serializes a manifest item (e.g. :class:`~lhotse.audio.Recording`,
+        :class:`~lhotse.cut.Cut`, etc.) to JSON and stores it in a JSONL file.
+        """
+        try:
+            if manifest.id in self.ignore_ids:
+                return
+        except AttributeError:
+            pass
+        print(
+            json.dumps(manifest.to_dict(), cls=NumpyEncoder),
+            file=self.file
+        )
+
+
 class JsonlMixin:
     def to_jsonl(self, path: Pathlike) -> None:
         save_to_jsonl(self.to_dicts(), path)
@@ -101,6 +185,43 @@ class JsonlMixin:
     def from_jsonl(cls, path: Pathlike) -> Manifest:
         data = load_jsonl(path)
         return cls.from_dicts(data)
+
+    @classmethod
+    def open_writer(cls, path: Pathlike, overwrite: bool = False) -> SequentialJsonlWriter:
+        """
+        Open a sequential writer that allows to store the manifests one by one,
+        without the necessity of storing the whole manifest set in-memory.
+        Supports writing to JSONL format (``.jsonl``), with optional gzip
+        compression (``.jsonl.gz``).
+
+        Example:
+
+            >>> from lhotse import RecordingSet
+            ... recordings = [...]
+            ... with RecordingSet.open_writer('recordings.jsonl.gz') as writer:
+            ...     for recording in recordings:
+            ...         writer.write(recording)
+
+        This writer can be useful for continuing to write files that were previously
+        stopped -- it will open the existing file and scan it for item IDs to skip
+        writing them later. It can also be quried for existing IDs so that the user
+        code may skip preparing the corresponding manifets.
+
+        Example:
+
+            >>> from lhotse import RecordingSet, Recording
+            ... with RecordingSet.open_writer('recordings.jsonl.gz') as writer:
+            ...     for path in Path('.').rglob('*.wav'):
+            ...         recording_id = path.stem
+            ...         if writer.contains(recording_id):
+            ...             # Item already written previously - skip processing.
+            ...             continue
+            ...         # Item doesn't exist yet - run extra work to prepare the manifest
+            ...         # and store it.
+            ...         recording = Recording.from_file(path, recording_id=recording_id)
+            ...         writer.write(recording)
+        """
+        return SequentialJsonlWriter(path, overwrite=overwrite)
 
 
 class LazyMixin:
@@ -119,7 +240,7 @@ class LazyMixin:
 
         This method requires ``pyarrow`` and ``pandas`` to be installed.
         """
-        return cls(LazyDict.from_jsonl(path))
+        return cls(LazyDict(path))
 
     def to_arrow(self, path: Pathlike) -> None:
         """
@@ -128,6 +249,8 @@ class LazyMixin:
         but it allows to read the manifest with a relatively small memory footprint (~300M).
         """
         import pyarrow as pa
+        # If the underlying storage for manifests is already lazy, we can
+        # access the arrow tables directly without the need to convert items.
         if self.is_lazy:
             # TODO: I don't want to add a special method for retrieving those in each manifest type;
             #       after this work is done, I will make a refactoring PR that renames these members
@@ -141,14 +264,36 @@ class LazyMixin:
                 table = self.cuts.table
             else:
                 raise NotImplementedError(f"Unsupported type of manifest for arrow serialization: {type(self)}")
-            with open(path, "wb") as f, pa.RecordBatchStreamWriter(f, schema=table.schema) as writer:
+            with open(path, "wb") as f, pa.RecordBatchFileWriter(f, schema=table.schema) as writer:
                 for batch in table.to_batches():
                     writer.write_batch(batch)
         else:
-            raise NotImplementedError("Currently, storing manifests that are not represented as "
-                                      "Arrow tables already is not supported. Instead, you can convert "
-                                      "the manifest by reading it's JSONL using `from_jsonl_lazy` method, "
-                                      "and then calling `to_arrow()` on that instance.")
+            # We will take the first 1000 items from the manifest to infer the schema.
+            # TODO: might want to sample items randomly in case their manifests vary...
+            schema = pa.schema(pa.array(list(self.subset(first=1000).to_dicts())).type)
+            # Open the file for writing and initialize the pyarrow batch writer.
+            # Note that the batch size we determine here will be used to load whole chunks into
+            # memory during deserialization.
+            with open(path, "wb") as f, pa.RecordBatchFileWriter(f, schema=schema) as writer:
+                # We are (lazily) grouping the items in manifest into chunks,
+                # each of ``batch_size`` items.
+                batch_size = 10 * 1024
+                chunks = grouper(n=batch_size, iterable=self.to_dicts())
+                for chunk in chunks:
+                    # We convert the items in each chunk into Arrow's columnar representation.
+                    # To do this, we first iterate by available "columns" (i.e. dict keys),
+                    # and for each of them create an Arrow array with the corresponding values.
+                    # These arrays are then used to create an arrow Table.
+                    arrays = [
+                        pa.array(
+                            [item.get(key) for item in chunk],
+                            type=schema.field(key_idx).type
+                        ) for key_idx, key in enumerate(schema.names)
+                    ]
+                    table = pa.Table.from_arrays(arrays, schema=schema)
+                    # The loop below will iterate only once, since we ensured there's exactly one batch.
+                    for idx, batch in enumerate(table.to_batches(max_chunksize=batch_size)):
+                        writer.write_batch(batch)
 
     @classmethod
     def from_arrow(cls, path: Pathlike) -> Manifest:
@@ -166,7 +311,7 @@ class LazyMixin:
 
         This method requires ``pyarrow`` and ``pandas`` to be installed.
         """
-        return cls(LazyDict.from_arrow(path))
+        return cls(LazyDict(path))
 
 
 def grouper(n, iterable):
@@ -202,8 +347,9 @@ def load_manifest(path: Pathlike, manifest_cls: Optional[Type] = None) -> Manife
     elif extension_contains('.yaml', path):
         raw_data = load_yaml(path)
     elif extension_contains('.arrow', path):
-        assert manifest_cls is not None, "For lazy deserialization with arrow, " \
-                                         "the manifest type has to be known."
+        assert manifest_cls is not None, \
+            "For lazy deserialization with arrow, the manifest type has to be known. " \
+            "Try using [CutSet|RecordingSet|SupervisionSet].from_file(...) instead."
         return manifest_cls.from_arrow(path)
     else:
         raise ValueError(f"Not a valid manifest: {path}")
@@ -278,34 +424,62 @@ class LazyDict:
         making it incredibly slow...
     """
 
-    def __init__(self, table):
+    def __init__(self, path: Pathlike):
+        self.path = Path(path)
+        self._reset()
+
+    def __getstate__(self):
+        """
+        Store the state for pickling -- we'll only store the path, and re-initialize
+        LazyDict when unpickled. This is necessary to transfer LazyDict across processes
+        for PyTorch's DataLoader workers (otherwise mmapped file gets copied into memory).
+        """
+        state = {'path': self.path}
+        return state
+
+    def __setstate__(self, state):
+        """Restore the state when unpickled -- open the mmap/jsonl file again."""
+        self.__dict__.update(state)
+        self._reset()
+
+    def _reset(self):
         _check_arrow()
-        self.table = table
+        self._init_table_from_path()
         self.batches = deque(self.table.to_batches())
         self.curr_view = self.batches[0].to_pandas()
         self.id2pos = dict(zip(self.curr_view.id, range(len(self.curr_view.id))))
+        self.prev_view = None
+        self.prev_id2pos = {}
 
-    @classmethod
-    def from_jsonl(cls, path: Pathlike) -> 'LazyDict':
-        _check_arrow()
-        import pyarrow.json as paj
-        table = paj.read_json(str(path))
-        return cls(table)
-
-    @classmethod
-    def from_arrow(cls, path: Pathlike) -> 'LazyDict':
-        _check_arrow()
-        import pyarrow as pa
-        mmap = pa.memory_map(str(path))
-        stream = pa.ipc.open_stream(mmap)
-        table = stream.read_all()
-        return cls(table)
+    def _init_table_from_path(self):
+        if '.jsonl' in self.path.suffixes:
+            # Can read ".jsonl" or ".jsonl.gz"
+            import pyarrow.json as paj
+            self.table = paj.read_json(
+                str(self.path),
+                read_options=paj.ReadOptions(
+                    # magic constants:
+                    # 894 - estimated average number of bytes per JSON item manifest
+                    # 10000 - how many items we want to have in a chunk (Arrow's "batch")
+                    block_size=894 * 10000
+                )
+            )
+        elif '.arrow' == self.path.suffixes[-1]:
+            # Can read ".arrow"
+            import pyarrow as pa
+            mmap = pa.memory_map(str(self.path))
+            stream = pa.ipc.open_file(mmap)
+            self.table = stream.read_all()
+        else:
+            raise ValueError(f"Unknown LazyDict file format : '{self.path}'")
 
     def _progress(self):
         # Rotate the deque to the left by one item.
         # [0, 1, 2] -> [1, 2, 0]
         self.batches.rotate(-1)
+        self.prev_view = self.curr_view
         self.curr_view = self.batches[0].to_pandas()
+        self.prev_id2pos = self.id2pos
         self.id2pos = dict(zip(self.curr_view.id, range(len(self.curr_view.id))))
 
     def _find_key(self, key: str):
@@ -317,7 +491,10 @@ class LazyDict:
             # this should make search faster for contiguous keys.
             pos = self.id2pos.get(key)
             if pos is not None:
-                return self._deserialize_one(self.curr_view.iloc[pos].to_dict())
+                return deserialize_item(self.curr_view.iloc[pos].to_dict())
+            pos = self.prev_id2pos.get(key)
+            if pos is not None:
+                return deserialize_item(self.prev_view.iloc[pos].to_dict())
             # Not found in the current Arrow's "batch" -- we'll advance
             # to the next one and try again.
             self._progress()
@@ -342,7 +519,7 @@ class LazyDict:
         return value is not None
 
     def __repr__(self):
-        return f'LazyDict(num_items={self.table.num_rows})'
+        return f'LazyDict(num_items={len(self)})'
 
     def __iter__(self):
         for b in self.table.to_batches():
@@ -356,30 +533,35 @@ class LazyDict:
             # This seems to be the fastest way to iterate rows in a pyarrow table.
             # Conversion to pandas seems to have the least overhead
             # due to Arrow's zero-copy memory sharing policy.
-            yield from (self._deserialize_one(row.to_dict()) for idx, row in b.to_pandas().iterrows())
+            yield from (deserialize_item(row.to_dict()) for idx, row in b.to_pandas().iterrows())
 
     def items(self):
         yield from ((cut.id, cut) for cut in self.values())
 
-    @staticmethod
-    def _deserialize_one(data: dict) -> Any:
-        # Figures out what type of manifest is being decoded with some heuristics
-        # and returns a Lhotse manifest object rather than a raw dict.
-        from lhotse import Cut, Features, Recording, SupervisionSegment
-        from lhotse.cut import MixedCut
-        data = arr2list_recursive(data)
-        if 'sources' in data:
-            return Recording.from_dict(data)
-        if 'num_features' in data:
-            return Features.from_dict(data)
-        if 'type' not in data:
-            return SupervisionSegment.from_dict(data)
-        cut_type = data.pop('type')
-        if cut_type == 'Cut':
-            return Cut.from_dict(data)
-        if cut_type == 'MixedCut':
-            return MixedCut.from_dict(data)
-        raise ValueError(f"Unexpected cut type during deserialization: '{cut_type}'")
+
+def deserialize_item(data: dict) -> Any:
+    # Figures out what type of manifest is being decoded with some heuristics
+    # and returns a Lhotse manifest object rather than a raw dict.
+    from lhotse import MonoCut, Features, Recording, SupervisionSegment
+    from lhotse.cut import MixedCut
+    data = arr2list_recursive(data)
+    if 'sources' in data:
+        return Recording.from_dict(data)
+    if 'num_features' in data:
+        return Features.from_dict(data)
+    if 'type' not in data:
+        return SupervisionSegment.from_dict(data)
+    cut_type = data.pop('type')
+    if cut_type == 'MonoCut':
+        return MonoCut.from_dict(data)
+    if cut_type == 'Cut':
+        warnings.warn('Your manifest was created with Lhotse version earlier than v0.8, when MonoCut was called Cut. '
+                      'Please re-generate it with Lhotse v0.8 as it might stop working in a future version '
+                      '(using manifest.from_file() and then manifest.to_file() should be sufficient).')
+        return MonoCut.from_dict(data)
+    if cut_type == 'MixedCut':
+        return MixedCut.from_dict(data)
+    raise ValueError(f"Unexpected cut type during deserialization: '{cut_type}'")
 
 
 def arr2list_recursive(data: Union[dict, list], filter_none: bool = True) -> Union[dict, list]:

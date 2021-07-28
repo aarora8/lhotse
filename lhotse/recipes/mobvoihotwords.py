@@ -12,8 +12,6 @@ About the MobvoiHotwords corpus
     pressure levels are played in the background during the collection.
 """
 
-from collections import defaultdict
-
 import json
 import logging
 import shutil
@@ -23,7 +21,7 @@ from typing import Dict, Optional, Union
 
 from lhotse import validate_recordings_and_supervisions
 from lhotse.audio import Recording, RecordingSet
-from lhotse.recipes.utils import read_manifests_if_cached
+from lhotse.recipes.utils import manifests_exist, read_manifests_if_cached
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, urlretrieve_progress
 
@@ -48,16 +46,18 @@ def download_mobvoihotwords(
     resources_tar_name = 'mobvoi_hotword_dataset_resources.tgz'
     for tar_name in [dataset_tar_name, resources_tar_name]:
         tar_path = target_dir / tar_name
-        if force_download or not tar_path.is_file():
-            urlretrieve_progress(f'{url}/{tar_name}', filename=tar_path, desc=f'Downloading {tar_name}')
         corpus_dir = target_dir / 'MobvoiHotwords'
         extracted_dir = corpus_dir / tar_name[: -4]
         completed_detector = extracted_dir / '.completed'
-        if not completed_detector.is_file():
-            shutil.rmtree(extracted_dir, ignore_errors=True)
-            with tarfile.open(tar_path) as tar:
-                tar.extractall(path=corpus_dir)
-                completed_detector.touch()
+        if completed_detector.is_file():
+            logging.info(f'Skip {tar_name} because {completed_detector} exists.')
+            continue
+        if force_download or not tar_path.is_file():
+            urlretrieve_progress(f'{url}/{tar_name}', filename=tar_path, desc=f'Downloading {tar_name}')
+        shutil.rmtree(extracted_dir, ignore_errors=True)
+        with tarfile.open(tar_path) as tar:
+            tar.extractall(path=corpus_dir)
+        completed_detector.touch()
 
 
 def prepare_mobvoihotwords(
@@ -75,16 +75,19 @@ def prepare_mobvoihotwords(
     assert corpus_dir.is_dir(), f'No such directory: {corpus_dir}'
     dataset_parts = ['train', 'dev', 'test']
 
+    manifests = {}
+
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         # Maybe the manifests already exist: we can read them and save a bit of preparation time.
-        maybe_manifests = read_manifests_if_cached(dataset_parts=dataset_parts, output_dir=output_dir)
-        if maybe_manifests is not None:
-            return maybe_manifests
+        manifests = read_manifests_if_cached(dataset_parts=dataset_parts, output_dir=output_dir)
 
-    manifests = defaultdict(dict)
     for part in dataset_parts:
+        logging.info(f'Preparing MobvoiHotwords subset: {part}')
+        if manifests_exist(part=part, output_dir=output_dir):
+            logging.info(f'MobvoiHotwords subset: {part} already prepared - skipping.')
+            continue
         # Generate a mapping: utt_id -> (audio_path, audio_info, speaker, text)
         recordings = []
         supervisions = []
@@ -134,4 +137,4 @@ def prepare_mobvoihotwords(
             'supervisions': supervision_set
         }
 
-    return dict(manifests)  # Convert to normal dict
+    return manifests

@@ -1,7 +1,10 @@
+from tempfile import NamedTemporaryFile
+
+import numpy as np
 import pytest
 
 from lhotse.audio import AudioSource, Recording, RecordingSet
-from lhotse.cut import Cut, CutSet
+from lhotse.cut import CutSet, MonoCut
 from lhotse.features import FeatureSet, Features
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.testing.dummies import dummy_cut, dummy_supervision
@@ -28,7 +31,7 @@ def supervision_set():
 
 
 @pytest.fixture
-def libri_cut(libri_cut_set) -> Cut:
+def libri_cut(libri_cut_set) -> MonoCut:
     return libri_cut_set['e3e70682-c209-4cac-629f-6fbed82c07cd']
 
 
@@ -76,6 +79,18 @@ def test_load_none_features(libri_cut):
     libri_cut.features = None
     feats = libri_cut.load_features()
     assert feats is None
+
+
+def test_store_audio(libri_cut):
+    with NamedTemporaryFile() as f:
+        stored_cut = libri_cut.compute_and_store_recording(f.name)
+        samples1 = libri_cut.load_audio()
+        rec = Recording.from_file(f.name)
+        samples2 = rec.load_audio()
+        assert np.array_equal(samples1, samples2)
+        assert rec.duration == libri_cut.duration
+        assert rec.duration == stored_cut.duration
+        assert libri_cut.duration == stored_cut.duration
 
 
 @pytest.fixture

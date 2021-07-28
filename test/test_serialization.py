@@ -1,10 +1,13 @@
+import pickle
 from tempfile import NamedTemporaryFile
+from lhotse.supervision import AlignmentItem
 
 import pytest
 
-from lhotse import AudioSource, Cut, CutSet, FeatureSet, Features, Recording, RecordingSet, SupervisionSegment, \
+from lhotse import AudioSource, MonoCut, CutSet, FeatureSet, Features, Recording, RecordingSet, SupervisionSegment, \
     SupervisionSet, load_manifest, store_manifest
-from lhotse.utils import is_module_available, nullcontext as does_not_raise
+from lhotse.testing.dummies import DummyManifest
+from lhotse.utils import fastcopy, is_module_available, nullcontext as does_not_raise
 
 
 @pytest.mark.parametrize(
@@ -59,7 +62,16 @@ def supervision_set():
             text='transcript of the first segment',
             language='english',
             speaker='Norman Dyhrentfurth',
-            gender='male'
+            gender='male',
+            alignment={
+                'word':[
+                    AlignmentItem(symbol='transcript', start=0.1, duration=0.08),
+                    AlignmentItem(symbol='of', start=0.18, duration=0.02),
+                    AlignmentItem(symbol='the', start=0.2, duration=0.03),
+                    AlignmentItem(symbol='first', start=0.23, duration=0.07),
+                    AlignmentItem(symbol='segment', start=0.3, duration=0.1),
+                ]
+            }
         )
     ])
 
@@ -88,7 +100,7 @@ def feature_set():
 
 @pytest.fixture
 def cut_set():
-    cut = Cut(
+    cut = MonoCut(
         id='cut-1',
         start=0.0,
         duration=10.0,
@@ -124,6 +136,9 @@ def cut_set():
         ])
     return CutSet.from_cuts([
         cut,
+        fastcopy(cut, id='cut-nosup', supervisions=[]),
+        fastcopy(cut, id='cut-norec', recording=None),
+        fastcopy(cut, id='cut-nofeat', features=None),
         cut.pad(duration=30.0, direction='left'),
         cut.pad(duration=30.0, direction='right'),
         cut.pad(duration=30.0, direction='both'),
@@ -317,6 +332,53 @@ def test_lazy_jsonl_deserialization(manifests, manifest_type, format, compressed
     'manifest_type',
     ['recording_set', 'supervision_set', 'cut_set']
 )
+def test_lazy_arrow_serialization(manifests, manifest_type):
+    manifest = manifests[manifest_type]
+    with NamedTemporaryFile(suffix='.arrow') as f:
+        manifest.to_file(f.name)
+        lazy_manifest = type(manifest).from_file(f.name)
+        # Test iteration
+        for eager_obj, lazy_obj in zip(manifest, lazy_manifest):
+            assert eager_obj == lazy_obj
+        # Test accessing elements by ID
+        for lazy_obj in lazy_manifest:
+            lazy_manifest[lazy_obj.id]
+
+
+@pytest.mark.skipif(not is_module_available('pyarrow'), reason='Requires pyarrow')
+@pytest.mark.parametrize(
+    'manifest_type',
+    ['recording_set', 'supervision_set', 'cut_set']
+)
+def test_lazy_arrow_pickling(manifests, manifest_type):
+    manifest = manifests[manifest_type]
+    with NamedTemporaryFile(suffix='.arrow') as f, NamedTemporaryFile(suffix='.pkl') as f_pkl:
+        # Create an .arrow file that can be mmapped
+        manifest.to_file(f.name)
+        lazy_manifest = type(manifest).from_file(f.name)
+        # Create a pickle with a manifest that refers to an mmapped file
+        pickle.dump(lazy_manifest, f_pkl)
+        f_pkl.flush()
+        f_pkl.seek(0)
+        # Unpickle
+        unpickled_manifest = pickle.load(f_pkl)
+        # Lengths are the same
+        assert len(lazy_manifest) == len(manifest)
+        assert len(unpickled_manifest) == len(manifest)
+        # Test iteration
+        for eager_obj, lazy_obj, unpickled_obj in zip(manifest, lazy_manifest, unpickled_manifest):
+            assert eager_obj == lazy_obj
+            assert eager_obj == unpickled_obj
+        # Test accessing elements by ID
+        for unpickled_obj in unpickled_manifest:
+            unpickled_manifest[unpickled_obj.id]
+
+
+@pytest.mark.skipif(not is_module_available('pyarrow'), reason='Requires pyarrow')
+@pytest.mark.parametrize(
+    'manifest_type',
+    ['recording_set', 'supervision_set', 'cut_set']
+)
 @pytest.mark.parametrize(
     ['format', 'compressed'],
     [
@@ -324,7 +386,7 @@ def test_lazy_jsonl_deserialization(manifests, manifest_type, format, compressed
         ('jsonl', True),
     ]
 )
-def test_lazy_arrow_serialization(manifests, manifest_type, format, compressed):
+def test_lazy_jsonl_to_arrow_serialization(manifests, manifest_type, format, compressed):
     manifest = manifests[manifest_type]
     with NamedTemporaryFile(suffix='.' + format + ('.gz' if compressed else '')) as jsonl_f, \
             NamedTemporaryFile(suffix='.arrow') as arrow_f:
@@ -336,3 +398,40 @@ def test_lazy_arrow_serialization(manifests, manifest_type, format, compressed):
         lazy_manifest = type(manifest).from_arrow(arrow_f.name)
         for eager_obj, lazy_obj in zip(manifest, lazy_manifest):
             assert eager_obj == lazy_obj
+
+
+@pytest.mark.parametrize(
+    'manifest_type',
+    ['recording_set', 'supervision_set', 'cut_set']
+)
+@pytest.mark.parametrize(
+    ['format', 'compressed'],
+    [
+        ('jsonl', False),
+        ('jsonl', True),
+    ]
+)
+def test_sequential_jsonl_writer(manifests, manifest_type, format, compressed):
+    manifest = manifests[manifest_type]
+    with NamedTemporaryFile(suffix='.' + format + ('.gz' if compressed else '')) as jsonl_f:
+        with manifest.open_writer(jsonl_f.name) as writer:
+            for item in manifest:
+                writer.write(item)
+        restored = manifest.from_file(jsonl_f.name)
+        assert manifest == restored
+
+
+@pytest.mark.parametrize('overwrite', [True, False])
+def test_sequential_jsonl_writer_overwrite(overwrite):
+    cuts = DummyManifest(CutSet, begin_id=0, end_id=100)
+    half = cuts.split(num_splits=2)[0]
+    with NamedTemporaryFile(suffix='.jsonl') as jsonl_f:
+        # Store the first half
+        half.to_file(jsonl_f.name)
+
+        # Open sequential writer
+        with CutSet.open_writer(jsonl_f.name, overwrite=overwrite) as writer:
+            if overwrite:
+                assert all(not writer.contains(id_) for id_ in half.ids)
+            else:
+                assert all(writer.contains(id_) for id_ in half.ids)

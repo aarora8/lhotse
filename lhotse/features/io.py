@@ -1,12 +1,13 @@
 from abc import ABCMeta, abstractmethod
 from functools import lru_cache
+from math import ceil, floor
 from pathlib import Path
 from typing import List, Optional, Type
 
 import lilcom
 import numpy as np
 
-from lhotse.utils import Pathlike
+from lhotse.utils import Pathlike, is_module_available, SmartOpen
 
 
 class FeaturesWriter(metaclass=ABCMeta):
@@ -293,9 +294,19 @@ def lookup_cache_or_open(storage_path: str):
     return h5py.File(storage_path, 'r')
 
 
+@lru_cache(maxsize=None)
+def lookup_chunk_size(h5_file_handle) -> int:
+    """
+    Helper internal function to retrieve the chunk size from an HDF5 file.
+    Helps avoid unnecessary repeated disk reads.
+    """
+    return h5_file_handle[CHUNK_SIZE_KEY][()]  # [()] retrieves a scalar
+
+
 def close_cached_file_handles() -> None:
     """Closes the cached file handles in ``lookup_cache_or_open`` (see its docs for more details)."""
     lookup_cache_or_open.cache_clear()
+    lookup_chunk_size.cache_clear()
 
 
 @register_reader
@@ -336,11 +347,25 @@ class NumpyHdf5Writer(FeaturesWriter):
     """
     name = 'numpy_hdf5'
 
-    def __init__(self, storage_path: Pathlike, *args, **kwargs):
+    def __init__(
+            self,
+            storage_path: Pathlike,
+            mode: str = 'w',
+            *args,
+            **kwargs
+    ):
+        """
+        :param storage_path: Path under which we'll create the HDF5 file.
+            We will add a ``.h5`` suffix if it is not already in ``storage_path``.
+        :param mode: Modes supported by h5py:
+            w        Create file, truncate if exists (default)
+            w- or x  Create file, fail if exists
+            a        Read/write if exists, create otherwise
+        """
         super().__init__()
         import h5py
         self.storage_path_ = Path(storage_path).with_suffix('.h5')
-        self.hdf = h5py.File(self.storage_path, 'w')
+        self.hdf = h5py.File(self.storage_path, mode=mode)
 
     @property
     def storage_path(self) -> str:
@@ -403,16 +428,33 @@ class LilcomHdf5Writer(FeaturesWriter):
     """
     name = 'lilcom_hdf5'
 
-    def __init__(self, storage_path: Pathlike, tick_power: int = -5, *args, **kwargs):
+    def __init__(
+            self,
+            storage_path: Pathlike,
+            tick_power: int = -5,
+            mode: str = 'w',
+            *args,
+            **kwargs
+    ):
+        """
+        :param storage_path: Path under which we'll create the HDF5 file.
+            We will add a ``.h5`` suffix if it is not already in ``storage_path``.
+        :param tick_power: Determines the lilcom compression accuracy;
+            the input will be compressed to integer multiples of 2^tick_power.
+        :param mode: Modes supported by h5py:
+            w        Create file, truncate if exists (default)
+            w- or x  Create file, fail if exists
+            a        Read/write if exists, create otherwise
+        """
         super().__init__()
         import h5py
         self.storage_path_ = Path(storage_path).with_suffix('.h5')
-        self.hdf = h5py.File(self.storage_path, 'w')
+        self.hdf = h5py.File(self.storage_path, mode=mode)
         self.tick_power = tick_power
 
     @property
     def storage_path(self) -> str:
-        return self.storage_path_
+        return str(self.storage_path_)
 
     def write(self, key: str, value: np.ndarray) -> str:
         serialized_feats = lilcom.compress(value, tick_power=self.tick_power)
@@ -427,3 +469,263 @@ class LilcomHdf5Writer(FeaturesWriter):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+"""
+Lilcom-compressed numpy arrays, stored in HDF5 file, that store chunked features.
+They are suitable for storing features for long recordings since they are able to
+retrieve small chunks instead of full matrices.
+"""
+
+CHUNK_SIZE_KEY = '__LHOTSE_INTERNAL_CHUNK_SIZE__'
+
+
+@register_reader
+class ChunkedLilcomHdf5Reader(FeaturesReader):
+    """
+    Reads lilcom-compressed numpy arrays from a HDF5 file with chunked lilcom storage.
+    Each feature matrix is stored in an array of chunks - binary data compressed with lilcom.
+    Upon reading, we check how many chunks need to be retrieved to avoid excessive I/O.
+
+    ``storage_path`` corresponds to the HDF5 file path;
+    ``storage_key`` for each utterance is the key corresponding to the array (i.e. HDF5 "Group" name).
+    """
+    name = 'chunked_lilcom_hdf5'
+
+    def __init__(self, storage_path: Pathlike, *args, **kwargs):
+        super().__init__()
+        self.hdf = lookup_cache_or_open(storage_path)
+
+    def read(
+            self,
+            key: str,
+            left_offset_frames: int = 0,
+            right_offset_frames: Optional[int] = None
+    ) -> np.ndarray:
+        # First, determine which range of chunks need to be read.
+        chunk_size = lookup_chunk_size(self.hdf)
+        left_chunk_idx = floor(left_offset_frames / chunk_size)
+        if right_offset_frames is not None:
+            right_chunk_idx = ceil(right_offset_frames / chunk_size)
+        else:
+            right_chunk_idx = None
+
+        # Read, decode, concat
+        arr = np.concatenate([
+            lilcom.decompress(data.tobytes())
+            for data in self.hdf[key][left_chunk_idx: right_chunk_idx]
+        ], axis=0)
+
+        # Determine what piece of decoded data should be returned;
+        # we offset the input offsets by left_chunk_idx * chunk_size.
+        shift_frames = chunk_size * left_chunk_idx
+        left_offset_shift = left_offset_frames - shift_frames
+        if right_offset_frames is not None:
+            right_offset_shift = right_offset_frames - shift_frames
+        else:
+            right_offset_shift = None
+
+        return arr[left_offset_shift: right_offset_shift]
+
+
+@register_writer
+class ChunkedLilcomHdf5Writer(FeaturesWriter):
+    """
+    Writes lilcom-compressed numpy arrays to a HDF5 file with chunked lilcom storage.
+    Each feature matrix is stored in an array of chunks - binary data compressed with lilcom.
+    Upon reading, we check how many chunks need to be retrieved to avoid excessive I/O.
+
+    ``storage_path`` corresponds to the HDF5 file path;
+    ``storage_key`` for each utterance is the key corresponding to the array (i.e. HDF5 "Group" name).
+    """
+    name = 'chunked_lilcom_hdf5'
+
+    def __init__(
+            self,
+            storage_path: Pathlike,
+            tick_power: int = -5,
+            chunk_size: int = 100,
+            mode: str = 'w',
+            *args,
+            **kwargs
+    ):
+        """
+        :param storage_path: Path under which we'll create the HDF5 file.
+            We will add a ``.h5`` suffix if it is not already in ``storage_path``.
+        :param tick_power: Determines the lilcom compression accuracy;
+            the input will be compressed to integer multiples of 2^tick_power.
+        :param chunk_size: How many frames to store per chunk.
+            Too low a number will require many reads for long feature matrices,
+            too high a number will require to read more redundant data.
+        :param mode: Modes supported by h5py:
+            w        Create file, truncate if exists (default)
+            w- or x  Create file, fail if exists
+            a        Read/write if exists, create otherwise
+        """
+        super().__init__()
+        import h5py
+        self.storage_path_ = Path(storage_path).with_suffix('.h5')
+        self.tick_power = tick_power
+        self.chunk_size = chunk_size
+        self.hdf = h5py.File(self.storage_path, mode=mode)
+        if CHUNK_SIZE_KEY in self.hdf:
+            retrieved_chunk_size = self.hdf[CHUNK_SIZE_KEY][()]
+            assert retrieved_chunk_size == CHUNK_SIZE_KEY, \
+                f'Error: attempted to write with chunk size {self.chunk_size} to an h5py file that ' \
+                f'was created with chunk size {retrieved_chunk_size}.'
+        else:
+            self.hdf.create_dataset(CHUNK_SIZE_KEY, data=self.chunk_size)
+
+    @property
+    def storage_path(self) -> str:
+        return str(self.storage_path_)
+
+    def write(self, key: str, value: np.ndarray) -> str:
+        import h5py
+        from lhotse.features.compression import lilcom_compress_chunked
+
+        serialized_feats = lilcom_compress_chunked(
+            value, tick_power=self.tick_power, chunk_size=self.chunk_size
+        )
+        dset = self.hdf.create_dataset(
+            key, dtype=h5py.vlen_dtype(np.dtype('uint8')), shape=(len(serialized_feats),)
+        )
+        for idx, feat in enumerate(serialized_feats):
+            dset[idx] = np.frombuffer(feat, dtype=np.uint8)
+        return key
+
+    def close(self) -> None:
+        return self.hdf.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+"""
+Lilcom-compressed URL writers
+"""
+
+
+@register_reader
+class LilcomURLReader(FeaturesReader):
+    """
+    Downloads Lilcom-compressed files from a URL (S3, GCP, Azure, HTTP, etc.).
+    ``storage_path`` corresponds to the root URL (e.g. "s3://my-data-bucket")
+    ``storage_key`` will be concatenated to ``storage_path`` to form a full URL (e.g. "my-feature-file.llc")
+
+    .. caution::
+        Requires ``smart_open`` to be installed (``pip install smart_open``).
+    """
+    name = 'lilcom_url'
+
+    def __init__(
+            self,
+            storage_path: Pathlike,
+            *args,
+            **kwargs
+    ):
+        super().__init__()
+        self.base_url = str(storage_path)
+        # We are manually adding the slash to join the base URL and the key.
+        if self.base_url.endswith('/'):
+            self.base_url = self.base_url[:-1]
+
+    def read(
+            self,
+            key: str,
+            left_offset_frames: int = 0,
+            right_offset_frames: Optional[int] = None
+    ) -> np.ndarray:
+        # We are manually adding the slash to join the base URL and the key.
+        if key.startswith('/'):
+            key = key[1:]
+        with SmartOpen.open(f'{self.base_url}/{key}', 'rb') as f:
+            arr = lilcom.decompress(f.read())
+        return arr[left_offset_frames: right_offset_frames]
+
+
+@register_writer
+class LilcomURLWriter(FeaturesWriter):
+    """
+    Writes Lilcom-compressed files to a URL (S3, GCP, Azure, HTTP, etc.).
+    ``storage_path`` corresponds to the root URL (e.g. "s3://my-data-bucket")
+    ``storage_key`` will be concatenated to ``storage_path`` to form a full URL (e.g. "my-feature-file.llc")
+
+    .. caution::
+        Requires ``smart_open`` to be installed (``pip install smart_open``).
+    """
+    name = 'lilcom_url'
+
+    def __init__(
+            self,
+            storage_path: Pathlike,
+            tick_power: int = -5,
+            *args,
+            **kwargs
+    ):
+        super().__init__()
+        self.base_url = str(storage_path)
+        # We are manually adding the slash to join the base URL and the key.
+        if self.base_url.endswith('/'):
+            self.base_url = self.base_url[:-1]
+        self.tick_power = tick_power
+
+    @property
+    def storage_path(self) -> str:
+        return self.base_url
+
+    def write(self, key: str, value: np.ndarray) -> str:
+        # We are manually adding the slash to join the base URL and the key.
+        if key.startswith('/'):
+            key = key[1:]
+        # Add lilcom extension.
+        if not key.endswith('.llc'):
+            key = key + '.llc'
+        output_features_url = f'{self.base_url}/{key}'
+        serialized_feats = lilcom.compress(value, tick_power=self.tick_power)
+        with SmartOpen.open(output_features_url, 'wb') as f:
+            f.write(serialized_feats)
+        return key
+
+
+"""
+Kaldi-compatible feature reader
+"""
+
+
+@register_reader
+class KaldiReader(FeaturesReader):
+    """
+    Reads Kaldi's "feats.scp" file using kaldiio.
+    ``storage_path`` corresponds to the path to ``feats.scp``.
+    ``storage_key`` corresponds to the utterance-id in Kaldi.
+
+    .. caution::
+        Requires ``kaldiio`` to be installed (``pip install kaldiio``).
+    """
+    name = 'kaldiio'
+
+    def __init__(
+            self,
+            storage_path: Pathlike,
+            *args,
+            **kwargs
+    ):
+        if not is_module_available('kaldiio'):
+            raise ValueError("To read Kaldi feats.scp, please 'pip install kaldiio' first.")
+        import kaldiio
+        super().__init__()
+        self.storage_path = storage_path
+        self.storage = kaldiio.load_scp(str(self.storage_path))
+
+    def read(
+            self,
+            key: str,
+            left_offset_frames: int = 0,
+            right_offset_frames: Optional[int] = None
+    ) -> np.ndarray:
+        arr = self.storage[key]
+        return arr[left_offset_frames: right_offset_frames]

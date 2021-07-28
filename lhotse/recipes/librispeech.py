@@ -1,17 +1,16 @@
-from collections import defaultdict
-
 import logging
 import re
 import shutil
 import tarfile
 from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
-from tqdm.auto import tqdm
 from typing import Dict, Optional, Sequence, Tuple, Union
+
+from tqdm.auto import tqdm
 
 from lhotse import validate_recordings_and_supervisions
 from lhotse.audio import Recording, RecordingSet
-from lhotse.recipes.utils import read_manifests_if_cached
+from lhotse.recipes.utils import manifests_exist, read_manifests_if_cached
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, urlretrieve_progress
 
@@ -44,6 +43,8 @@ def download_librispeech(
         dataset_parts = MINI_LIBRISPEECH
 
     for part in tqdm(dataset_parts, desc='Downloading LibriSpeech parts'):
+        logging.info(f'Processing split: {part}')
+        # Determine the valid URL for a given split.
         if part in LIBRISPEECH:
             url = f'{base_url}/12'
         elif part in MINI_LIBRISPEECH:
@@ -51,17 +52,22 @@ def download_librispeech(
         else:
             logging.warning(f'Invalid dataset part name: {part}')
             continue
+        # Split directory exists and seem valid? Skip this split.
+        part_dir = target_dir / f'LibriSpeech/{part}'
+        completed_detector = part_dir / '.completed'
+        if completed_detector.is_file():
+            logging.info(f'Skipping {part} because {completed_detector} exists.')
+            continue
+        # Maybe-download the archive.
         tar_name = f'{part}.tar.gz'
         tar_path = target_dir / tar_name
         if force_download or not tar_path.is_file():
             urlretrieve_progress(f'{url}/{tar_name}', filename=tar_path, desc=f'Downloading {tar_name}')
-        part_dir = target_dir / f'LibriSpeech/{part}'
-        completed_detector = part_dir / '.completed'
-        if not completed_detector.is_file():
-            shutil.rmtree(part_dir, ignore_errors=True)
-            with tarfile.open(tar_path) as tar:
-                tar.extractall(path=target_dir)
-                completed_detector.touch()
+        # Remove partial unpacked files, if any, and unpack everything.
+        shutil.rmtree(part_dir, ignore_errors=True)
+        with tarfile.open(tar_path) as tar:
+            tar.extractall(path=target_dir)
+        completed_detector.touch()
 
 
 def prepare_librispeech(
@@ -99,17 +105,20 @@ def prepare_librispeech(
     elif isinstance(dataset_parts, str):
         dataset_parts = [dataset_parts]
 
+    manifests = {}
+
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         # Maybe the manifests already exist: we can read them and save a bit of preparation time.
-        maybe_manifests = read_manifests_if_cached(dataset_parts=dataset_parts, output_dir=output_dir)
-        if maybe_manifests is not None:
-            return maybe_manifests
+        manifests = read_manifests_if_cached(dataset_parts=dataset_parts, output_dir=output_dir)
 
-    manifests = defaultdict(dict)
     with ThreadPoolExecutor(num_jobs) as ex:
         for part in tqdm(dataset_parts, desc='Dataset parts'):
+            logging.info(f'Processing LibriSpeech subset: {part}')
+            if manifests_exist(part=part, output_dir=output_dir):
+                logging.info(f'LibriSpeech subset: {part} already prepared - skipping.')
+                continue
             recordings = []
             supervisions = []
             part_path = corpus_dir / part
@@ -148,7 +157,7 @@ def prepare_librispeech(
                 'supervisions': supervision_set
             }
 
-    return dict(manifests)  # Convert to normal dict
+    return manifests
 
 
 def parse_utterance(
