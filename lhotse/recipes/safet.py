@@ -7,7 +7,6 @@ have overlap, little reverberation but have significant noise. The noise
 is artificial and the SNR varies with time. The noise level varies
 from 0-14db or 70-85 dB. The noises are car ambulances, rain, or similar sounds.
 There are a total of 87 speakers.
-We currently support the following LDC packages:
 
 SAFE-T
   Speech       LDC2020E10
