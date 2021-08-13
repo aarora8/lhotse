@@ -475,8 +475,8 @@ class RecordingSet(Serializable, Sequence[Recording]):
         """
         Indicates whether this manifest was opened in lazy (read-on-the-fly) mode or not.
         """
-        from lhotse.serialization import LazyDict
-        return isinstance(self.recordings, LazyDict)
+        from lhotse.serialization import LazyJsonlIterator
+        return isinstance(self.recordings, LazyJsonlIterator)
 
     @property
     def ids(self) -> Iterable[str]:
@@ -657,6 +657,12 @@ class RecordingSet(Serializable, Sequence[Recording]):
 
     def __repr__(self) -> str:
         return f'RecordingSet(len={len(self)})'
+
+    def __contains__(self, item: Union[str, Recording]) -> bool:
+        if isinstance(item, str):
+            return item in self.recordings
+        else:
+            return item.id in self.recordings
 
     def __getitem__(self, recording_id_or_index: Union[int, str]) -> Recording:
         if isinstance(recording_id_or_index, str):

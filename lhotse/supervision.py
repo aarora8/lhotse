@@ -3,7 +3,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import groupby, islice
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from lhotse.serialization import Serializable
 from lhotse.utils import Pathlike, Seconds, TimeSpan, asdict_nonull, compute_num_samples, exactly_one_not_null, \
@@ -360,8 +360,8 @@ class SupervisionSet(Serializable, Sequence[SupervisionSegment]):
         """
         Indicates whether this manifest was opened in lazy (read-on-the-fly) mode or not.
         """
-        from lhotse.serialization import LazyDict
-        return isinstance(self.segments, LazyDict)
+        from lhotse.serialization import LazyJsonlIterator
+        return isinstance(self.segments, LazyJsonlIterator)
 
     @property
     def ids(self) -> Iterable[str]:
@@ -576,8 +576,17 @@ class SupervisionSet(Serializable, Sequence[SupervisionSegment]):
     def __repr__(self) -> str:
         return f'SupervisionSet(len={len(self)})'
 
-    def __getitem__(self, item: str) -> SupervisionSegment:
-        return self.segments[item]
+    def __getitem__(self, sup_id_or_index: Union[int, str]) -> SupervisionSegment:
+        if isinstance(sup_id_or_index, str):
+            return self.segments[sup_id_or_index]
+        # ~100x faster than list(dict.values())[index] for 100k elements
+        return next(val for idx, val in enumerate(self.segments.values()) if idx == sup_id_or_index)
+
+    def __contains__(self, item: Union[str, SupervisionSegment]) -> bool:
+        if isinstance(item, str):
+            return item in self.segments
+        else:
+            return item.id in self.segments
 
     def __iter__(self) -> Iterable[SupervisionSegment]:
         return iter(self.segments.values())
