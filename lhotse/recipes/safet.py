@@ -26,7 +26,6 @@ def prepare_safet(
     """
     Prepare manifests for safet corpus.
     We create two manifests: one with recordings, one with segments supervisions.
-
     :param corpus_dir: Path to ``LDC2020E10`` package.
     :param output_dir: Directory where the manifests should be written. Can be omitted to avoid writing.
     :return: A dict with manifests. The keys are: ``{'recordings', 'segments'}``.
@@ -106,3 +105,4 @@ def prepare_safet(
                 'supervisions': supervision_set
             }
     return manifests
+    
