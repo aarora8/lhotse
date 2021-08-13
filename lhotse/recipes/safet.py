@@ -12,8 +12,6 @@ We currently support the following LDC packages:
 SAFE-T
   Speech       LDC2020E10
   Transcripts  LDC2020E09
-
-This data is not available for free - your institution needs to have an LDC subscription.
 """
 
 from collections import defaultdict
