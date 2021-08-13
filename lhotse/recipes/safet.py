@@ -1,96 +1,26 @@
 """
-SAFE-T (speech analysis for emergency response technology) has 131 hrs
-(labelled and unlabelled) of single-channel 48 kHz training data.
-Most of the speakers are native English speakers. The participants
-are playing the game of Flashpoint fire rescue. The recordings do not
-have overlap, little reverberation but have significant noise. The noise
-is artificial and the SNR varies with time. The noise level varies
-from 0-14db or 70-85 dB. The noises are car ambulances, rain, or similar sounds.
-There are a total of 87 speakers.
-
 SAFE-T
   Speech       LDC2020E10
   Transcripts  LDC2020E09
 """
 
 from collections import defaultdict
-
-import re
-from itertools import chain
+import logging
+from itertools import chain, repeat
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from cytoolz import sliding_window
 
-from lhotse import validate_recordings_and_supervisions
-from lhotse.audio import Recording, RecordingSet
-from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, check_and_rglob, recursion_limit
-
-
-WORDLIST = dict()
-UNK = '<UNK>'
-REPLACE_UNKS = True
-
-def case_normalize(w):
-    # this is for POI
-    # but we should add it into the lexicon
-    if w.startswith('~'):
-        return w.upper()
-    else:
-        return w.upper()
-
-def process_transcript(transcript):
-    global WORDLIST
-    if_only_unk = True
-    # https://www.programiz.com/python-programming/regex
-    # [] for set of characters you with to match
-    # eg. [abc] --> will search for a or b or c
-    # "." matches any single character
-    # "$" to check if string ends with a certain character 
-    # eg. "a$" should end with "a"
-    # replace <extreme background> with <extreme_background>
-    # replace <foreign lang="Spanish">fuego</foreign> with foreign_lang=
-    # remove "[.,!?]"
-    # remove " -- "
-    # remove " --" --> strings that ends with "-" and starts with " "
-    # \s+ markers are – that means “any white space character, one or more times”
-    tmp = re.sub(r'<extreme background>', '', transcript)
-    tmp = re.sub(r'<background>', '', transcript)
-    tmp = re.sub(r'foreign\s+lang=', 'foreign_lang=', tmp)
-    tmp = re.sub(r'\(\(', '', tmp)
-    tmp = re.sub(r'\)\)', '', tmp)
-    tmp = re.sub(r'[.,!?]', ' ', tmp)
-    tmp = re.sub(r' -- ', ' ', tmp)
-    tmp = re.sub(r' --$', '', tmp)
-    list_words = re.split(r'\s+', tmp)
-
-    out_list_words = list()
-    for w in list_words:
-        w = w.strip()
-        w = case_normalize(w)
-        if w == "":
-            continue
-        elif w in WORDLIST:
-            out_list_words.append(w)
-            if_only_unk = False
-        else:
-            out_list_words.append(UNK)
-
-    if if_only_unk:
-        out_list_words = ''
-    return ' '.join(out_list_words)
-
-
-def read_lexicon_words(lexicon):
-    with open(lexicon, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = re.sub(r'(?s)\s.*', '', line)
-            WORDLIST[line] = 1
+from lhotse import compute_num_samples, fix_manifests, validate_recordings_and_supervisions
+from lhotse.audio import AudioSource, Recording, RecordingSet
+from lhotse.recipes.utils import manifests_exist, read_manifests_if_cached
+from lhotse.supervision import SupervisionSegment, SupervisionSet
+from lhotse.utils import Pathlike, Seconds, is_module_available
 
 
 def prepare_safet(
-        corpus_dir: Pathlike,
-        lexicon_dir:Pathlike,
+        corpus_dir,
         output_dir: Optional[Pathlike] = None
 ) -> Dict[str, Union[RecordingSet, SupervisionSet]]:
     """
@@ -103,13 +33,10 @@ def prepare_safet(
     """
 
     corpus_dir = Path(corpus_dir)
-    lexicon_dir = Path(lexicon_dir)
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    lexicon = lexicon_dir / 'lexicon_raw_nosil.txt'
-    read_lexicon_words(lexicon)
     dataset_parts = ['dev', 'dev_clean', 'train']
     manifests = defaultdict(dict)
     for part in dataset_parts:
@@ -150,17 +77,10 @@ def prepare_safet(
                     duration = end_time - start_time - 0.1
                     speaker_id = line_parts[2][:-1]
                     transcription = " ".join(line_parts[3:])
-                    if part == 'dev':
-                        cleaned_transcrition = transcription
-                    else:
-                        cleaned_transcrition = process_transcript(transcription)
-                    # do not use utterances which have empty cleaned transcript
-                    if not cleaned_transcrition:
-                        continue
                     # do not use utterances which do not have speaker label
                     if speaker_id.startswith('background'):
                         continue
-                    supervision_id += 1
+                    supervision_id = supervision_id + 1
                     speaker_id = str(speaker_id).zfill(6)
                     supervision_id_str = str(supervision_id).zfill(6)
                     uttid =f'{speaker_id}_{supervision_id_str}'
@@ -172,7 +92,7 @@ def prepare_safet(
                         channel=0,
                         language='English',
                         speaker=speaker_id,
-                        text=cleaned_transcrition
+                        text=transcription
                     )
                     supervisions.append(segment)
         recording_set = RecordingSet.from_recordings(recordings)
