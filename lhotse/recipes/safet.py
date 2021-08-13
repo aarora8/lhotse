@@ -28,7 +28,7 @@ def prepare_safet(
     We create two manifests: one with recordings, one with segments supervisions.
     :param corpus_dir: Path to ``LDC2020E10`` package.
     :param output_dir: Directory where the manifests should be written. Can be omitted to avoid writing.
-    :return: A dict with manifests. The keys are: ``{'recordings', 'segments'}``.
+    :return: A dict with manifests. keys: ``{'recordings', 'segments'}``.
     """
 
     corpus_dir = Path(corpus_dir)
@@ -105,4 +105,12 @@ def prepare_safet(
                 'supervisions': supervision_set
             }
     return manifests
-    
+
+def main():
+    prepare_safet('/exp/aarora/storage/corpora/safet/',
+    '/exp/aarora/icefall_work_env/lhotse_output/safet')
+
+
+
+if __name__ == '__main__':
+    main()
