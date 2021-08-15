@@ -1,7 +1,8 @@
 """
 SAFE-T
-  Speech       LDC2020E10
-  Transcripts  LDC2020E09
+  Speech       LDC2020E10, LDC2019E37
+  Transcripts  LDC2020E09, LDC2019E36
+  Dev          LDC2019E53
 """
 
 from collections import defaultdict
@@ -36,7 +37,7 @@ def prepare_safet(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset_parts = ['dev', 'dev_clean', 'train']
+    dataset_parts = ['dev', 'train']
     manifests = defaultdict(dict)
     for part in dataset_parts:
         recordings = []
