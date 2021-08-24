@@ -246,8 +246,8 @@ def get_extractor_type(name: str) -> Type:
     :param name: specifies which feature extractor should be used.
     :return: A feature extractors type.
     """
-    logging.warning(f'printing feature extractors')
-    logging.warning(f' {FEATURE_EXTRACTORS}')
+    #logging.warning(f'printing feature extractors')
+    #logging.warning(f' {FEATURE_EXTRACTORS}')
     return FEATURE_EXTRACTORS[name]
 
 
