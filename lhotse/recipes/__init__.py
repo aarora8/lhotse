@@ -8,6 +8,8 @@ from .cmu_arctic import download_cmu_arctic, prepare_cmu_arctic
 from .cmu_kids import prepare_cmu_kids
 from .cslu_kids import prepare_cslu_kids
 from .dihard3 import prepare_dihard3
+from .fisher_english import prepare_fisher_english
+from .fisher_spanish import prepare_fisher_spanish
 from .gale_arabic import prepare_gale_arabic
 from .gale_mandarin import prepare_gale_mandarin
 from .gigaspeech import prepare_gigaspeech
@@ -26,3 +28,4 @@ from .switchboard import prepare_switchboard
 from .tedlium import download_tedlium, prepare_tedlium
 from .timit import download_timit, prepare_timit
 from .vctk import download_vctk, prepare_vctk
+from .yesno import download_yesno, prepare_yesno

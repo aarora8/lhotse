@@ -63,6 +63,10 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_dihard3`
   * - English Broadcast News 1997
     - :func:`lhotse.recipes.prepare_broadcast_news`
+  * - Fisher English Part 1, 2
+    - :func:`lhotse.recipes.prepare_fisher_english`
+  * - Fisher Spanish
+    - :func:`lhotse.recipes.prepare_fisher_spanish`
   * - GALE Arabic Broadcast Speech
     - :func:`lhotse.recipes.prepare_gale_arabic`
   * - GALE Mandarin Broadcast Speech
@@ -97,6 +101,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_tedlium`
   * - VCTK
     - :func:`lhotse.recipes.prepare_vctk`
+  * - YesNo
+    - :func:`lhotse.recipes.prepare_yesno`
 
 
 Adding new corpora

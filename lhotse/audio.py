@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Opt
 import numpy as np
 from tqdm.auto import tqdm
 
-from lhotse.augmentation import AudioTransform, Resample, Speed
+from lhotse.augmentation import AudioTransform, Resample, Speed, Tempo, Volume
 from lhotse.serialization import Serializable
 from lhotse.utils import (Decibels, NonPositiveEnergyError, Pathlike, Seconds, SetContainingAnything, SmartOpen,
                           asdict_nonull, compute_num_samples, exactly_one_not_null, fastcopy, ifnone,
@@ -133,7 +133,7 @@ class Recording:
 
     Note that :class:`~lhotse.audio.Recording` can represent both a single utterance (e.g., in LibriSpeech)
     and a 1-hour session with multiple channels and speakers (e.g., in AMI).
-    In the latter case, it is paritioned into data suitable for model training using :class:`~lhotse.cut.Cut`.
+    In the latter case, it is partitioned into data suitable for model training using :class:`~lhotse.cut.Cut`.
 
     .. hint::
         Lhotse reads audio recordings using `pysoundfile`_ and `audioread`_, similarly to librosa,
@@ -228,11 +228,15 @@ class Recording:
         if path.suffix.lower() == '.opus':
             # We handle OPUS as a special case because we might need to force a certain sampling rate.
             info = opus_info(path, force_opus_sampling_rate=force_opus_sampling_rate)
+        elif path.suffix.lower() == '.sph':
+            # We handle SPHERE as another special case because some old codecs (i.e. "shorten" codec)
+            # can't be handled by neither pysoundfile nor pyaudioread.
+            info = sph_info(path)
         else:
             try:
                 # Try to parse the file using pysoundfile first.
-                import soundfile
-                info = soundfile.info(str(path))
+                import soundfile as sf
+                info = sf.info(str(path))
             except:
                 # Try to parse the file using audioread as a fallback.
                 info = audioread_info(str(path))
@@ -375,6 +379,48 @@ class Recording:
             transforms=transforms
         )
 
+    def perturb_tempo(self, factor: float, affix_id: bool = True) -> 'Recording':
+        """
+        Return a new ``Recording`` that will lazily perturb the tempo while loading audio.
+
+        Compared to speed perturbation, tempo preserves pitch.
+        The ``num_samples`` and ``duration`` fields are updated to reflect the
+        shrinking/extending effect of tempo.
+
+        :param factor: The tempo will be adjusted this many times (e.g. factor=1.1 means 1.1x faster).
+        :param affix_id: When true, we will modify the ``Recording.id`` field
+            by affixing it with "_tp{factor}".
+        :return: a modified copy of the current ``Recording``.
+        """
+        transforms = self.transforms.copy() if self.transforms is not None else []
+        transforms.append(Tempo(factor=factor).to_dict())
+        new_num_samples = perturb_num_samples(self.num_samples, factor)
+        new_duration = new_num_samples / self.sampling_rate
+        return fastcopy(
+            self,
+            id=f'{self.id}_tp{factor}' if affix_id else self.id,
+            num_samples=new_num_samples,
+            duration=new_duration,
+            transforms=transforms
+        )
+
+    def perturb_volume(self, factor: float, affix_id: bool = True) -> 'Recording':
+        """
+        Return a new ``Recording`` that will lazily perturb the volume while loading audio.
+
+        :param factor: The volume scale to be applied (e.g. factor=1.1 means 1.1x louder).
+        :param affix_id: When true, we will modify the ``Recording.id`` field
+            by affixing it with "_tp{factor}".
+        :return: a modified copy of the current ``Recording``.
+        """
+        transforms = self.transforms.copy() if self.transforms is not None else []
+        transforms.append(Volume(factor=factor).to_dict())
+        return fastcopy(
+            self,
+            id=f'{self.id}_vp{factor}' if affix_id else self.id,
+            transforms=transforms
+        )
+
     def resample(self, sampling_rate: int) -> 'Recording':
         """
         Return a new ``Recording`` that will be lazily resampled while loading audio.
@@ -461,6 +507,7 @@ class RecordingSet(Serializable, Sequence[Recording]):
         and executed upon reading the audio::
 
             >>> recs_sp = recs.perturb_speed(factor=1.1)
+            >>> recs_vp = recs.perturb_volume(factor=2.)
             >>> recs_24k = recs.resample(24000)
     """
 
@@ -647,6 +694,30 @@ class RecordingSet(Serializable, Sequence[Recording]):
         """
         return RecordingSet.from_recordings(r.perturb_speed(factor=factor, affix_id=affix_id) for r in self)
 
+    def perturb_tempo(self, factor: float, affix_id: bool = True) -> 'RecordingSet':
+        """
+        Return a new ``RecordingSet`` that will lazily perturb the tempo while loading audio.
+        The ``num_samples`` and ``duration`` fields are updated to reflect the
+        shrinking/extending effect of tempo.
+
+        :param factor: The speed will be adjusted this many times (e.g. factor=1.1 means 1.1x faster).
+        :param affix_id: When true, we will modify the ``Recording.id`` field
+            by affixing it with "_sp{factor}".
+        :return: a ``RecordingSet`` containing the perturbed ``Recording`` objects.
+        """
+        return RecordingSet.from_recordings(r.perturb_tempo(factor=factor, affix_id=affix_id) for r in self)
+
+    def perturb_volume(self, factor: float, affix_id: bool = True) -> 'RecordingSet':
+        """
+        Return a new ``RecordingSet`` that will lazily perturb the volume while loading audio.
+
+        :param factor: The volume scale to be applied (e.g. factor=1.1 means 1.1x louder).
+        :param affix_id: When true, we will modify the ``Recording.id`` field
+            by affixing it with "_sp{factor}".
+        :return: a ``RecordingSet`` containing the perturbed ``Recording`` objects.
+        """
+        return RecordingSet.from_recordings(r.perturb_volume(factor=factor, affix_id=affix_id) for r in self)
+
     def resample(self, sampling_rate: int) -> 'RecordingSet':
         """
         Apply resampling to all recordings in the ``RecordingSet`` and return a new ``RecordingSet``.
@@ -786,7 +857,7 @@ class AudioMixer:
                     f"To perform mix, energy must be non-zero and non-negative (got {added_audio_energy}). "
                 )
             target_energy = self.reference_energy * (10.0 ** (-snr / 10))
-            # When mixing time-domain singals, we are working with root-power (field) quantities,
+            # When mixing time-domain signals, we are working with root-power (field) quantities,
             # whereas the energy ratio applies to power quantities. To compute the gain correctly,
             # we need to take a square root of the energy ratio.
             gain = sqrt(target_energy / added_audio_energy)
@@ -814,6 +885,12 @@ def read_audio(
             offset=offset,
             duration=duration,
             force_opus_sampling_rate=force_opus_sampling_rate,
+        )
+    elif isinstance(path_or_fd, (str, Path)) and str(path_or_fd).lower().endswith('.sph'):
+        return read_sph(
+            path_or_fd,
+            offset=offset,
+            duration=duration
         )
     try:
         import soundfile as sf
@@ -1102,3 +1179,46 @@ def parse_channel_from_ffmpeg_output(ffmpeg_stderr: bytes) -> str:
         f"Could not determine the number of channels for OPUS file from the following ffmpeg output "
         f"(shown as bytestring due to avoid possible encoding issues):\n{str(ffmpeg_stderr)}"
     )
+
+
+def sph_info(path: Pathlike) -> LibsndfileCompatibleAudioInfo:
+    samples, sampling_rate = read_sph(path)
+    return LibsndfileCompatibleAudioInfo(
+        channels=samples.shape[0],
+        frames=samples.shape[1],
+        samplerate=sampling_rate,
+        duration=samples.shape[1] / sampling_rate
+    )
+
+
+def read_sph(
+        sph_path: Pathlike,
+        offset: Seconds = 0.0,
+        duration: Optional[Seconds] = None
+) -> Tuple[np.ndarray, int]:
+    """
+    Reads SPH files using sph2pipe in a shell subprocess.
+    Unlike audioread, correctly supports offsets and durations for reading short chunks.
+
+    :return: a tuple of audio samples and the sampling rate.
+    """
+
+    sph_path = Path(sph_path)
+
+    # Construct the sph2pipe command depending on the arguments passed.
+    cmd = f'sph2pipe -f wav -p -t {offset}:'
+
+    if duration is not None:
+        cmd += f'{round(offset + duration, 5)}'
+    # Add the input specifier after offset and duration.
+    cmd += f' {sph_path}'
+
+    # Actual audio reading.
+    proc = BytesIO(run(cmd, shell=True, check=True, stdout=PIPE, stderr=PIPE).stdout)
+
+    import soundfile as sf
+    with sf.SoundFile(proc) as sf_desc:
+        audio, sampling_rate = sf_desc.read(dtype=np.float32), sf_desc.samplerate
+        audio = audio.reshape(1, -1) if sf_desc.channels == 1 else audio.T
+
+    return audio, sampling_rate

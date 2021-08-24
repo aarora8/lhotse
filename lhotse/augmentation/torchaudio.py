@@ -44,6 +44,7 @@ class SoxEffectTransform:
         >>> augment_fn = SoxEffectTransform(effects=[
         >>>    ['reverb', 50, 50, RandomValue(0, 100)],
         >>>    ['speed', RandomValue(0.9, 1.1)],
+        >>>    ['volume', RandomValue(0.125, 2.)],
         >>>    ['rate', 16000],
         >>> ])
         >>> augmented = augment_fn(audio, 16000)
@@ -245,6 +246,89 @@ class Resample(AudioTransform):
         return old_offset, old_duration
 
 
+@dataclass
+class Tempo(AudioTransform):
+    """Tempo perturbation effect, the same one as invoked with `sox tempo` in the command line.
+
+    Compared to speed perturbation, tempo preserves pitch.
+    It resamples the signal back to the input sampling rate, so the number of output samples will
+    be smaller or greater, depending on the tempo factor.
+    """
+
+    factor: float
+
+    def __call__(self, samples: np.ndarray, sampling_rate: int) -> np.ndarray:
+        sampling_rate = int(sampling_rate)  # paranoia mode
+        if isinstance(samples, np.ndarray):
+            samples = torch.from_numpy(samples)
+
+        augmented, new_sampling_rate = torchaudio.sox_effects.apply_effects_tensor(
+            samples, sampling_rate, [["tempo", str(self.factor)]]
+        )
+        return augmented.numpy()
+
+    def reverse_timestamps(
+        self,
+        offset: Seconds,
+        duration: Optional[Seconds],
+        sampling_rate: int,
+    ) -> Tuple[Seconds, Optional[Seconds]]:
+        """
+        This method helps estimate the original offset and duration for a recording
+        before tempo perturbation was applied.
+        We need this estimate to know how much audio to actually load from disk during the
+        call to ``load_audio()``.
+        """
+        start_sample = compute_num_samples(offset, sampling_rate)
+        num_samples = (
+            compute_num_samples(duration, sampling_rate)
+            if duration is not None
+            else None
+        )
+        start_sample = perturb_num_samples(start_sample, 1 / self.factor)
+        num_samples = (
+            perturb_num_samples(num_samples, 1 / self.factor)
+            if num_samples is not None
+            else None
+        )
+        return (
+            start_sample / sampling_rate,
+            num_samples / sampling_rate if num_samples is not None else None,
+        )
+
+
+@dataclass
+class Volume(AudioTransform):
+    """
+    Volume perturbation effect, the same one as invoked with `sox vol` in the command line.
+
+    It changes the amplitude of the original samples, so the absolute values of output samples will
+    be smaller or greater, depending on the vol factor.
+    """
+    factor: float
+
+    def __call__(self, samples: np.ndarray, sampling_rate: int) -> np.ndarray:
+        sampling_rate = int(sampling_rate)  # paranoia mode
+        effect = [['vol', str(self.factor)]]
+        if isinstance(samples, np.ndarray):
+            samples = torch.from_numpy(samples)
+        augmented, _ = torchaudio.sox_effects.apply_effects_tensor(samples, sampling_rate, effect)
+        return augmented.numpy()
+
+    def reverse_timestamps(
+            self,
+            offset: Seconds,
+            duration: Optional[Seconds],
+            sampling_rate: Optional[int] # Not used, made for compatibility purposes
+    ) -> Tuple[Seconds, Optional[Seconds]]:
+        """
+        This method just returnes the original offset and duration as volume perturbation
+        doesn't change any these audio properies.
+        """
+
+        return offset, duration
+
+
 def speed(sampling_rate: int) -> List[List[str]]:
     return [
         ['speed', RandomValue(0.9, 1.1)],
@@ -257,6 +341,10 @@ def reverb(sampling_rate: int) -> List[List[str]]:
         ['reverb', 50, 50, RandomValue(0, 100)],
         ['remix', '-'],  # Merge all channels (reverb changes mono to stereo)
     ]
+
+
+def volume(sampling_rate: int) -> List[List[str]]:
+    return [['vol', RandomValue(0.125, 2.)]]
 
 
 def pitch(sampling_rate: int) -> List[List[str]]:
