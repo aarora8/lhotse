@@ -18,6 +18,24 @@ from lhotse.audio import AudioSource, Recording, RecordingSet
 from lhotse.recipes.utils import manifests_exist, read_manifests_if_cached
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, Seconds, is_module_available
+import json
+import argparse
+import logging
+import sys
+
+
+def hms_to_seconds(hms):
+    hour = hms.split(':')[0]
+    minute = hms.split(':')[1]
+    second = hms.split(':')[2].split('.')[0]
+
+    # .xx (10 ms order)
+    ms10 = hms.split(':')[2].split('.')[1]
+
+    # total seconds
+    seconds = int(hour) * 3600 + int(minute) * 60 + int(second)
+
+    return '{:07d}'.format(int(str(seconds) + ms10))
 
 
 def prepare_chime(
@@ -50,50 +68,40 @@ def prepare_chime(
         for audio_path in audio_paths:
           recording = Recording.from_file(audio_path)
           recordings.append(recording)
-        #? recording_set = RecordingSet.from_recordings(recordings)
-        #? recording_set.to_json(output_dir / f'recordings_{part}.json')
 
         transcript_paths = check_and_rglob(transcript_dir, '*.json')
         for transcript_path in transcript_paths:
-            with open(transcript_path, 'r', encoding='utf-8') as f:
-                for line in f.readlines():
-                    line_parts = line.split()
-                    start_time = float(line_parts[0])
-                    end_time = float(line_parts[1])
-                    # subtract 0.1 sec to avoid supervision to be larger
-                    # than recording
-                    duration = end_time - start_time - 0.1
-                    speaker_id = line_parts[2][:-1]
-                    transcription = " ".join(line_parts[3:])
-                    # do not use utterances which do not have speaker label
-                    if speaker_id.startswith('background'):
-                        continue
-                    supervision_id = supervision_id + 1
-                    speaker_id = str(speaker_id).zfill(6)
-                    supervision_id_str = str(supervision_id).zfill(6)
-                    uttid =f'{speaker_id}_{supervision_id_str}'
-                    segment = SupervisionSegment(
-                        id=uttid,
-                        recording_id=recording_id,
-                        start=float(start_time),
-                        duration=duration,
-                        channel=0,
-                        language='English',
-                        speaker=speaker_id,
-                        text=transcription
-                    )
-                    supervisions.append(segment)
-        recording_set = RecordingSet.from_recordings(recordings)
-        supervision_set = SupervisionSet.from_segments(supervisions)
-        validate_recordings_and_supervisions(recording_set, supervision_set)
-        if output_dir is not None:
-            supervision_set.to_json(output_dir / f'supervisions_safet_{part}.json')
-            recording_set.to_json(output_dir / f'recordings_safet_{part}.json')
-        manifests[part] = {
-                'recordings': recording_set,
-                'supervisions': supervision_set
-            }
-    return manifests
+            with open(transcript_path, 'r', encoding="utf-8") as f:
+                j = json.load(f)
+                for x in j:
+                    if '[redacted]' not in x['words']:
+                        session_id = x['session_id']
+                        speaker_id = x['speaker']
+                        mictype = 'original'
+                        
+                        start_time = x['start_time'][mictype]
+                        end_time = x['end_time'][mictype]
+                        #? convert to seconds, e.g., 1:10:05.55 -> 3600 + 600 + 5.55 = 4205.55
+                        start_time = hms_to_seconds(start_time)
+                        end_time = hms_to_seconds(end_time)
+
+                        #? remove meta chars and convert to lower
+                        words = x['words'].replace('"', '')\
+                                        .replace('.', '')\
+                                        .replace('?', '')\
+                                        .replace(',', '')\
+                                        .replace(':', '')\
+                                        .replace(';', '')\
+                                        .replace('!', '').lower()
+
+                        #? remove multiple spaces
+                        words = " ".join(words.split())
+                        uttid = speaker_id + '_' + session_id
+                        #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
+                        if end_time > start_time:
+                            continue
+                        
+
 
 def main():
     prepare_chime('/export/common/data/corpora/CHiME5/',
