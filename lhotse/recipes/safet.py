@@ -43,8 +43,8 @@ def prepare_safet(
         recordings = []
         supervisions = []
         supervision_id = 0
-        # create recordings list with sampling_rate, num_samples
-        # duration, location and id.
+        #? create recordings list with sampling_rate, num_samples
+        #? duration, location and id.
         if 'dev' in part:
             wav_dir = corpus_dir / 'dev' / 'audio_dir'
             transcript_dir = corpus_dir / 'dev' / 'transcript_dir'
@@ -56,13 +56,13 @@ def prepare_safet(
           recording = Recording.from_file(audio_path)
           recordings.append(recording)
 
-        # Create supervision list with transcription, speaker_id,
-        # language_id, time and recording information.
-        # get list of transcript path.
+        #? Create supervision list with transcription, speaker_id,
+        #? language_id, time and recording information.
+        #? get list of transcript path.
         transcript_paths = check_and_rglob(transcript_dir, '*.tsv')
         for transcript_path in transcript_paths:
-            # get basename of the file and add '_mixed' suffix to it
-            # (this is also the recording_id)
+            #? get basename of the file and add '_mixed' suffix to it
+            #? (this is also the recording_id)
             if 'dev' in part:
                 recording_id = Path(transcript_path).stem + '_dev_mixed'
             else:

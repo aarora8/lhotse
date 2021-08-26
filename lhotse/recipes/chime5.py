@@ -27,15 +27,12 @@ import sys
 def hms_to_seconds(hms):
     hour = hms.split(':')[0]
     minute = hms.split(':')[1]
-    second = hms.split(':')[2].split('.')[0]
-
-    # .xx (10 ms order)
-    ms10 = hms.split(':')[2].split('.')[1]
+    second = hms.split(':')[2]
 
     # total seconds
-    seconds = int(hour) * 3600 + int(minute) * 60 + int(second)
-
-    return '{:07d}'.format(int(str(seconds) + ms10))
+    seconds = float(hour) * 3600 + float(minute) * 60 + float(second)
+    
+    return seconds
 
 
 def prepare_chime(
@@ -84,23 +81,44 @@ def prepare_chime(
                         #? convert to seconds, e.g., 1:10:05.55 -> 3600 + 600 + 5.55 = 4205.55
                         start_time = hms_to_seconds(start_time)
                         end_time = hms_to_seconds(end_time)
-
+                        duration = end_time - start_time
                         #? remove meta chars and convert to lower
-                        words = x['words'].replace('"', '')\
+                        transcription = x['words'].replace('"', '')\
                                         .replace('.', '')\
                                         .replace('?', '')\
                                         .replace(',', '')\
                                         .replace(':', '')\
                                         .replace(';', '')\
                                         .replace('!', '').lower()
-
                         #? remove multiple spaces
-                        words = " ".join(words.split())
+                        transcription = " ".join(transcription.split())
                         uttid = speaker_id + '_' + session_id
+                        recording_id = session_id + '_' + speaker_id
                         #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
                         if end_time > start_time:
                             continue
-                        
+                        segment = SupervisionSegment(
+                            id=uttid,
+                            recording_id=recording_id,
+                            start=float(start_time),
+                            duration=duration,
+                            channel=0,
+                            language='English',
+                            speaker=speaker_id,
+                            text=transcription
+                        )
+                        supervisions.append(segment)
+        recording_set = RecordingSet.from_recordings(recordings)
+        supervision_set = SupervisionSet.from_segments(supervisions)
+        validate_recordings_and_supervisions(recording_set, supervision_set)
+        if output_dir is not None:
+            supervision_set.to_json(output_dir / f'supervisions_{part}.json')
+            recording_set.to_json(output_dir / f'recordings_{part}.json')
+        manifests[part] = {
+                'recordings': recording_set,
+                'supervisions': supervision_set
+            }
+    return manifests
 
 
 def main():
