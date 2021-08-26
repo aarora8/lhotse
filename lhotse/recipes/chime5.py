@@ -57,6 +57,7 @@ def prepare_chime(
     for part in dataset_parts:
         recordings = []
         supervisions = []
+        supervision_id = 0
         wav_dir = corpus_dir / 'audio' / f'{part}' 
         transcript_dir = corpus_dir / 'transcriptions' / f'{part}' 
         audio_paths = check_and_rglob(wav_dir, '*.wav')
@@ -92,7 +93,9 @@ def prepare_chime(
                                         .replace('!', '').lower()
                         #? remove multiple spaces
                         transcription = " ".join(transcription.split())
-                        uttid = speaker_id + '_' + session_id
+                        supervision_id = supervision_id + 1
+                        supervision_id_str = str(supervision_id).zfill(6)
+                        uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
                         recording_id = session_id + '_' + speaker_id
                         #? print(recording_id)
                         #? print(duration)
