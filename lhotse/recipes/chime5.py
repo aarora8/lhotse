@@ -97,9 +97,6 @@ def prepare_chime(
                         supervision_id_str = str(supervision_id).zfill(6)
                         uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
                         recording_id = session_id + '_' + speaker_id
-                        #? print(recording_id)
-                        #? print(duration)
-                        #? print(uttid)
                         #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
                         if end_time < start_time:
                             continue
