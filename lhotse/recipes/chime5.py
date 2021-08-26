@@ -52,12 +52,11 @@ def prepare_chime(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset_parts = ['dev', 'eval', 'train']
+    dataset_parts = ['dev', 'train']
     manifests = defaultdict(dict)
     for part in dataset_parts:
         recordings = []
         supervisions = []
-        supervision_id = 0
         wav_dir = corpus_dir / 'audio' / f'{part}' 
         transcript_dir = corpus_dir / 'transcriptions' / f'{part}' 
         audio_paths = check_and_rglob(wav_dir, '*.wav')
@@ -82,6 +81,7 @@ def prepare_chime(
                         start_time = hms_to_seconds(start_time)
                         end_time = hms_to_seconds(end_time)
                         duration = end_time - start_time
+                        
                         #? remove meta chars and convert to lower
                         transcription = x['words'].replace('"', '')\
                                         .replace('.', '')\
@@ -94,13 +94,16 @@ def prepare_chime(
                         transcription = " ".join(transcription.split())
                         uttid = speaker_id + '_' + session_id
                         recording_id = session_id + '_' + speaker_id
+                        #? print(recording_id)
+                        #? print(duration)
+                        #? print(uttid)
                         #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
                         if end_time > start_time:
                             continue
                         segment = SupervisionSegment(
                             id=uttid,
                             recording_id=recording_id,
-                            start=float(start_time),
+                            start=start_time,
                             duration=duration,
                             channel=0,
                             language='English',
