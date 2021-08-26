@@ -98,7 +98,7 @@ def prepare_chime(
                         #? print(duration)
                         #? print(uttid)
                         #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
-                        if end_time > start_time:
+                        if end_time < start_time:
                             continue
                         segment = SupervisionSegment(
                             id=uttid,
