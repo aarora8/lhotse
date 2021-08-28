@@ -123,7 +123,7 @@ def prepare_chime(
             }
     return manifests
 
-
+#! vs code is good
 def main():
     prepare_chime('/export/common/data/corpora/CHiME5/',
     '/exp/aarora/icefall_work_env/lhotse_output/chime')
