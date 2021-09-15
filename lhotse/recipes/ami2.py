@@ -8,7 +8,9 @@ import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Union
-
+import gzip
+import shutil
+import re
 from tqdm.auto import tqdm
 
 from lhotse import validate_recordings_and_supervisions
@@ -101,7 +103,6 @@ MICS = ['ihm']
 def download_ami(
     target_dir: Pathlike = ".",
     annotations_dir: Optional[Pathlike] = None,
-    force_download: Optional[bool] = False,
     url: Optional[str] = "http://groups.inf.ed.ac.uk/ami",
     mic: Optional[str] = "ihm",
 ) -> None:
@@ -119,10 +120,10 @@ def download_ami(
 
     #? Annotations
     logging.info("Downloading AMI annotations")
-    annotations_name = "annotations.zip"
+    annotations_name = "annotations1.zip"
     annotations_path = annotations_dir / annotations_name
-    annotations_url = f"{url}/AMICorpusAnnotations/ami_public_manual_1.6.2.zip"
-    if force_download or not annotations_path.is_file():
+    annotations_url = f"{url}/AMICorpusAnnotations/ami_manual_annotations_v1.6.1_export.gzip"
+    if not annotations_path.is_file():
         urllib.request.urlretrieve(annotations_url, filename=annotations_path)
 
 
@@ -137,72 +138,113 @@ class AmiSegmentAnnotation(NamedTuple):
 def parse_ami_annotations(
     annotations_zip: Pathlike, max_pause: float
 ) -> Dict[str, List[SupervisionSegment]]:
-    annotations = defaultdict(dict)
-    with zipfile.ZipFile(annotations_zip, "r") as archive:
-        # First we get global speaker ids and channels
-        global_spk_id = {}
-        channel_id = {}
-        with archive.open("corpusResources/meetings.xml") as f:
-            tree = ET.parse(f)
-            for meeting in tree.getroot():
-                meet_id = meeting.attrib["observation"]
-                for speaker in meeting:
-                    local_id = (meet_id, speaker.attrib["nxt_agent"])
-                    global_spk_id[local_id] = speaker.attrib["global_name"]
-                    channel_id[local_id] = int(speaker.attrib["channel"])
+    encoding = 'utf-8'
+    annotations = []
+    with gzip.open(annotations_zip,'rb') as fin:        
+        for line in fin:
+            if line.startswith(b'Found'):
+                continue
+            if line.startswith(b'Obs'):
+                continue
+            if line.startswith(b'obs'):
+                continue
+            line = str(line, encoding)
+            annotations.append(line)
+    # annotations.append("ES2002a\tB\tFEE005 \t1 \t55.415\t77.456\t55.415\t77.29\tUm well this is the kick-off meeting for our our project . Um and um this is just what we're gonna be doing over the next twenty five minutes . Um so first of all , just to kind of make sure that we all know each other , I'm Laura and I'm the project manager . Do you want to introduce yourself again ? \t60.35 67.55 69.85 72.79 74.42 77.29 \t\n")
+    # <meetingID> <skip> <spkr> <channel> <skip> <skip> <start time> <end time> <transcripts> <partial end time1> <partial end time2> <partial end time3>
+    count=0
+    for line in annotations:
+        parts = line.strip().split('\t')
+        meeting_id = parts[0]
+        spkr = parts[2]
+        channel_id = parts[3]
+        st_time = float(parts[6])
+        end_time = float(parts[7])
+        transcript = parts[8]
+        intermediate_endtimes = parts[9].split()
 
-        # Now iterate over all alignments
-        for file in archive.namelist():
-            if file.startswith("words/") and file[-1] != "/":
-                meet_id, x, _, _ = file.split("/")[1].split(".")
-                if (meet_id, x) not in global_spk_id:
-                    logging.warning(
-                        f"No speaker {meet_id}.{x} found! Skipping annotation."
-                    )
-                    continue
-                spk = global_spk_id[(meet_id, x)]
-                channel = channel_id[(meet_id, x)]
-                tree = ET.parse(archive.open(file))
-                key = (meet_id, spk, channel)
-                if key not in annotations:
-                    annotations[key] = []
-                for child in tree.getroot():
-                    # If the alignment does not contain start or end time info,
-                    # ignore them. Also, only consider words in the alignment XML files.
-                    if (
-                        "starttime" not in child.attrib
-                        or "endtime" not in child.attrib
-                        or child.tag != "w"
-                    ):
-                        continue
-                    text = child.text if child.tag == "w" else child.attrib["type"]
-                    # to convert HTML escape sequences
-                    text = html.unescape(text)
-                    annotations[key].append(
-                        AmiSegmentAnnotation(
-                            text=text,
-                            speaker=spk,
-                            gender=spk[0],
-                            begin_time=float(child.attrib["starttime"]),
-                            end_time=float(child.attrib["endtime"]),
-                        )
-                    )
+        transcript = transcript.strip().split('.')
+        total_comma_counts = 0
+        for index, transcript_part in enumerate(transcript):
+            if not transcript_part:
+                continue
+            total_comma_counts = total_comma_counts + transcript_part.count(',')
+            try: 
+                float(intermediate_endtimes[index + total_comma_counts])
+            except:
+                print(transcript)
+                print(intermediate_endtimes)
+            # print(transcript_part)
+            # print(intermediate_endtimes[index + total_comma_counts])
+            count = count + 1
+    print(count)
 
-        # Post-process segments and combine neighboring segments from the same speaker
-        for key in annotations:
-            new_segs = []
-            cur_seg = list(annotations[key])[0]
-            for seg in list(annotations[key])[1:]:
-                if seg.begin_time - cur_seg.end_time <= max_pause:
-                    cur_seg = cur_seg._replace(
-                        text=f"{cur_seg.text} {seg.text}", end_time=seg.end_time
-                    )
-                else:
-                    new_segs.append(cur_seg)
-                    cur_seg = seg
-            new_segs.append(cur_seg)
-            annotations[key] = new_segs
-    return annotations
+        
+    # with zipfile.ZipFile(annotations_zip, "r") as archive:
+    #     # First we get global speaker ids and channels
+    #     global_spk_id = {}
+    #     channel_id = {}
+    #     with archive.open("corpusResources/meetings.xml") as f:
+    #         tree = ET.parse(f)
+    #         for meeting in tree.getroot():
+    #             meet_id = meeting.attrib["observation"]
+    #             for speaker in meeting:
+    #                 local_id = (meet_id, speaker.attrib["nxt_agent"])
+    #                 global_spk_id[local_id] = speaker.attrib["global_name"]
+    #                 channel_id[local_id] = int(speaker.attrib["channel"])
+
+    #     # Now iterate over all alignments
+    #     for file in archive.namelist():
+    #         if file.startswith("words/") and file[-1] != "/":
+    #             meet_id, x, _, _ = file.split("/")[1].split(".")
+    #             if (meet_id, x) not in global_spk_id:
+    #                 logging.warning(
+    #                     f"No speaker {meet_id}.{x} found! Skipping annotation."
+    #                 )
+    #                 continue
+    #             spk = global_spk_id[(meet_id, x)]
+    #             channel = channel_id[(meet_id, x)]
+    #             tree = ET.parse(archive.open(file))
+    #             key = (meet_id, spk, channel)
+    #             if key not in annotations:
+    #                 annotations[key] = []
+    #             for child in tree.getroot():
+    #                 # If the alignment does not contain start or end time info,
+    #                 # ignore them. Also, only consider words in the alignment XML files.
+    #                 if (
+    #                     "starttime" not in child.attrib
+    #                     or "endtime" not in child.attrib
+    #                     or child.tag != "w"
+    #                 ):
+    #                     continue
+    #                 text = child.text if child.tag == "w" else child.attrib["type"]
+    #                 # to convert HTML escape sequences
+    #                 text = html.unescape(text)
+    #                 annotations[key].append(
+    #                     AmiSegmentAnnotation(
+    #                         text=text,
+    #                         speaker=spk,
+    #                         gender=spk[0],
+    #                         begin_time=float(child.attrib["starttime"]),
+    #                         end_time=float(child.attrib["endtime"]),
+    #                     )
+    #                 )
+
+    #     # Post-process segments and combine neighboring segments from the same speaker
+    #     for key in annotations:
+    #         new_segs = []
+    #         cur_seg = list(annotations[key])[0]
+    #         for seg in list(annotations[key])[1:]:
+    #             if seg.begin_time - cur_seg.end_time <= max_pause:
+    #                 cur_seg = cur_seg._replace(
+    #                     text=f"{cur_seg.text} {seg.text}", end_time=seg.end_time
+    #                 )
+    #             else:
+    #                 new_segs.append(cur_seg)
+    #                 cur_seg = seg
+    #         new_segs.append(cur_seg)
+    #         annotations[key] = new_segs
+    #return annotations
 
 
 def prepare_ami(
@@ -211,7 +253,7 @@ def prepare_ami(
     output_dir: Pathlike,
     mic: Optional[str] = "ihm",
     partition: Optional[str] = "full-corpus-asr",
-    max_pause: Optional[float] = 0.3,
+    max_pause: Optional[float] = 0.0,
 ) -> Dict[str, Dict[str, Union[RecordingSet, SupervisionSet]]]:
     """
     Returns the manifests which consist of the Recordings and Supervisions
@@ -235,7 +277,7 @@ def prepare_ami(
 
     logging.info("Parsing AMI annotations")
     annotations = parse_ami_annotations(
-        annotations_dir / "annotations.zip", max_pause=max_pause
+        annotations_dir / "annotations1.zip", max_pause=max_pause
     )
     annotation_by_id_and_channel = {
         (key[0], key[2]): annotations[key] for key in annotations
@@ -310,7 +352,7 @@ def prepare_ami(
 
 
 def main():
-    #download_ami('/exp/aarora/icefall_work_env/other/lhotse_output/ami')
+    download_ami('/exp/aarora/icefall_work_env/other/lhotse_output/ami/')
 
     prepare_ami('/export/common/data/corpora/amicorpus/',
     '/exp/aarora/icefall_work_env/other/lhotse_output/ami',
