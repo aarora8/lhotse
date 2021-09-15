@@ -170,11 +170,10 @@ def prepare_ami(
         manifests[part] = {"recordings": recording_part, "supervisions": supervision_part}
     return dict(manifests)
 
+# def main():
+#     prepare_ami('/export/common/data/corpora/amicorpus/',
+#     '/exp/aarora/icefall_work_env/other/lhotse_output/ami')
 
-def main():
-    prepare_ami('/export/common/data/corpora/amicorpus/',
-    '/exp/aarora/icefall_work_env/other/lhotse_output/ami')
 
-
-if __name__ == '__main__':
-    main()
+# if __name__ == '__main__':
+#     main()
