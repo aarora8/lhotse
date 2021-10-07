@@ -33,6 +33,10 @@ PARTITIONS = {
 }
 MICS = ['ihm','ihm-mix','sdm','mdm']
 
+def download_ami() -> None:
+    logging.info("Downloading AMI annotations")
+
+
 class AmiSegmentAnnotation(NamedTuple):
     text: str
     speaker: str
