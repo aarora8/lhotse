@@ -53,8 +53,9 @@ def prepare_chime(
         output_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_parts = ['dev', 'train']
-    microphonetype_list = ['ref', 'worn', 'U01', 'U02', 'U03', 'U04', 'U05', 'U06']
-    microphonetype_list = ['worn']
+    dataset_parts = ['dev']
+    microphonetype_list = ['worn', 'U01', 'U02', 'U03', 'U04', 'U05', 'U06']
+    #microphonetype_list = ['U01']
     
     manifests = defaultdict(dict)
     for part in dataset_parts:
@@ -93,6 +94,9 @@ def prepare_chime(
                                 supervision_id = supervision_id + 1
                                 end_time, start_time, uttid, duration, transcription = get_supervision_details(x, mictype, supervision_id, speaker_id, session_id)
                                 #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
+                                if end_time == None or start_time == None or uttid == None or duration == None or transcription == None:
+                                    continue
+
                                 if end_time < start_time:
                                     continue
                                 segment = SupervisionSegment(
@@ -129,33 +133,37 @@ def get_recording_id_list(mictype, session_id, speaker_id):
         return recording_id_list
     else:
         for channel in channel_list:
-            recording_id = session_id + '_' + speaker_id + '.' + channel
-        recording_id_list.append(recording_id)
+            recording_id = session_id + '_' + mictype + '.' + channel
+            recording_id_list.append(recording_id)
         return recording_id_list
 
 
 
 
 def get_supervision_details(x, mictype, supervision_id, speaker_id, session_id):
-    start_time = x['start_time'][mictype]
-    end_time = x['end_time'][mictype]
-    #? convert to seconds, e.g., 1:10:05.55 -> 3600 + 600 + 5.55 = 4205.55
-    start_time = hms_to_seconds(start_time)
-    end_time = hms_to_seconds(end_time)
-    duration = end_time - start_time
+    try:
+        start_time = x['start_time'][mictype]
+        end_time = x['end_time'][mictype]
+        #? convert to seconds, e.g., 1:10:05.55 -> 3600 + 600 + 5.55 = 4205.55
+        start_time = hms_to_seconds(start_time)
+        end_time = hms_to_seconds(end_time)
+        duration = end_time - start_time
 
-    #? remove meta chars and convert to lower
-    transcription = x['words'].replace('"', '')\
+        #? remove meta chars and convert to lower
+        transcription = x['words'].replace('"', '')\
                 .replace('.', '')\
                 .replace('?', '')\
                 .replace(',', '')\
                 .replace(':', '')\
                 .replace(';', '')\
                 .replace('!', '').lower()
-    #? remove multiple spaces
-    transcription = " ".join(transcription.split())
-    supervision_id_str = str(supervision_id).zfill(6)
-    uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
+        #? remove multiple spaces
+        transcription = " ".join(transcription.split())
+        supervision_id_str = str(supervision_id).zfill(6)
+        uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
+    except Exception:
+        return None, None, None, None, None
+
     return end_time, start_time, uttid, duration, transcription
 
 def main():
