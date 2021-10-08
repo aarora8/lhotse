@@ -52,16 +52,13 @@ def prepare_chime(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset_parts = ['dev', 'train']
-    dataset_parts = ['dev']
-    microphonetype_list = ['worn', 'U01', 'U02', 'U03', 'U04', 'U05', 'U06']
-    #microphonetype_list = ['U01']
-    
+    dataset_parts = ['dev', 'eval', 'train']
     manifests = defaultdict(dict)
     for part in dataset_parts:
         recordings = []
         supervisions = []
         supervision_id = 0
+        microphonetype_list = get_microphonetype_list(part)
         wav_dir = corpus_dir / 'audio' / f'{part}' 
         transcript_dir = corpus_dir / 'transcriptions' / f'{part}' 
         audio_paths = check_and_rglob(wav_dir, '*.wav')
@@ -97,7 +94,7 @@ def prepare_chime(
                                 if end_time == None or start_time == None or uttid == None or duration == None or transcription == None:
                                     continue
 
-                                if end_time < start_time:
+                                if end_time <= start_time:
                                     continue
                                 segment = SupervisionSegment(
                                     id=uttid,
@@ -136,6 +133,17 @@ def get_recording_id_list(mictype, session_id, speaker_id):
             recording_id = session_id + '_' + mictype + '.' + channel
             recording_id_list.append(recording_id)
         return recording_id_list
+
+
+def get_microphonetype_list(dataset_part):
+    if dataset_part == 'dev':
+        microphonetype_list = ['worn', 'ref', 'U01', 'U02', 'U03', 'U04', 'U05', 'U06']
+    elif dataset_part == 'eval':
+        microphonetype_list = ['U01', 'U02', 'U03', 'U04', 'U05', 'U06']
+    else:
+        microphonetype_list = ['worn', 'U01', 'U02', 'U03', 'U04', 'U05', 'U06']
+    
+    return microphonetype_list
 
 
 
