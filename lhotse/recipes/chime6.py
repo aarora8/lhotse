@@ -1,8 +1,9 @@
 """
-CHiME-5
+CHiME-6
   http://spandh.dcs.shef.ac.uk/chime_challenge/CHiME5/data.html
-  CHiME5/audio/{dev,eval,train}
-  CHiME5/transcriptions/{dev,eval,train}
+  CHiME6/audio/{dev,eval,train}
+  CHiME6/transcriptions/{dev,eval,train}
+  end_time, start_time, words, speaker, session_id, reference and location
 """
 
 from collections import defaultdict
@@ -24,15 +25,12 @@ import logging
 import sys
 
 
-def hms_to_seconds(hms):
-    hour = hms.split(':')[0]
-    minute = hms.split(':')[1]
-    second = hms.split(':')[2]
-
-    # total seconds
-    seconds = float(hour) * 3600 + float(minute) * 60 + float(second)
-    
-    return seconds
+Session2Microphones = {
+    'S01': ['U01','U02','U04','U05','U06'],
+    'S05': ['U01','U02','U05','U06'],
+    'S09': ['U01','U02','U03','U04','U06'],
+    'S22': ['U01','U02','U04','U05','U06']
+}
 
 
 def prepare_chime(
@@ -89,7 +87,7 @@ def prepare_chime(
                             for recording_id in recording_id_list:
                                 
                                 supervision_id = supervision_id + 1
-                                end_time, start_time, uttid, duration, transcription = get_supervision_details(x, mictype, supervision_id, speaker_id, session_id)
+                                end_time, start_time, uttid, duration, transcription = get_supervision_details(x, supervision_id, speaker_id, session_id)
                                 #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
                                 if end_time == None or start_time == None or uttid == None or duration == None or transcription == None:
                                     continue
@@ -124,15 +122,36 @@ def prepare_chime(
 def get_recording_id_list(mictype, session_id, speaker_id):
     recording_id_list = []
     channel_list = ['CH1', 'CH2', 'CH3', 'CH4']
+    # we are not using S12 duration mismatch for some utterances
+    if session_id == 'S12':
+        return recording_id_list
+
     if mictype == 'original':
         recording_id = session_id + '_' + speaker_id
         recording_id_list.append(recording_id)
         return recording_id_list
     else:
-        for channel in channel_list:
-            recording_id = session_id + '_' + mictype + '.' + channel
-            recording_id_list.append(recording_id)
+        if session_id in Session2Microphones:
+            if mictype in Session2Microphones[session_id]:
+                for channel in channel_list:
+                    recording_id = session_id + '_' + mictype + '.' + channel
+                    recording_id_list.append(recording_id)
+        else:
+            for channel in channel_list:
+                    recording_id = session_id + '_' + mictype + '.' + channel
+                    recording_id_list.append(recording_id)
         return recording_id_list
+
+
+def hms_to_seconds(hms):
+    hour = hms.split(':')[0]
+    minute = hms.split(':')[1]
+    second = hms.split(':')[2]
+
+    # total seconds
+    seconds = float(hour) * 3600 + float(minute) * 60 + float(second)
+    
+    return seconds
 
 
 def get_microphonetype_list(dataset_part):
@@ -146,10 +165,10 @@ def get_microphonetype_list(dataset_part):
     return microphonetype_list
 
 
-def get_supervision_details(x, mictype, supervision_id, speaker_id, session_id):
+def get_supervision_details(x, supervision_id, speaker_id, session_id):
     try:
-        start_time = x['start_time'][mictype]
-        end_time = x['end_time'][mictype]
+        start_time = x['start_time']
+        end_time = x['end_time']
         #? convert to seconds, e.g., 1:10:05.55 -> 3600 + 600 + 5.55 = 4205.55
         start_time = hms_to_seconds(start_time)
         end_time = hms_to_seconds(end_time)
@@ -172,9 +191,10 @@ def get_supervision_details(x, mictype, supervision_id, speaker_id, session_id):
 
     return end_time, start_time, uttid, duration, transcription
 
+
 def main():
-    prepare_chime('/export/common/data/corpora/CHiME5/',
-    '/exp/aarora/icefall_work_env/lhotse_output/chime')
+    prepare_chime('/exp/aarora/CHiME6/',
+    '/exp/aarora/icefall_work_env/lhotse_output/chime6')
 
 
 if __name__ == '__main__':
