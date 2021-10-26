@@ -43,6 +43,8 @@ a CLI tool that create the manifests given a corpus directory.
 
   * - Corpus name
     - Function
+  * - ADEPT
+    - :func:`lhotse.recipes.prepare_adept`
   * - Aishell
     - :func:`lhotse.recipes.prepare_aishell`
   * - AMI
@@ -55,8 +57,12 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_callhome_english`
   * - CMU Arctic
     - :func:`lhotse.recipes.prepare_cmu_arctic`
+  * - CMU Indic
+    - :func:`lhotse.recipes.prepare_cmu_indic`
   * - CMU Kids
     - :func:`lhotse.recipes.prepare_cmu_kids`
+  * - CommonVoice
+    - :func:`lhotse.recipes.prepare_commonvoice`
   * - CSLU Kids
     - :func:`lhotse.recipes.prepare_cslu_kids`
   * - DIHARD III
@@ -75,6 +81,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_gigaspeech`
   * - Heroico
     - :func:`lhotse.recipes.prepare_heroico`
+  * - HiFiTTS
+    - :func:`lhotse.recipes.prepare_hifitts`
   * - L2 Arctic
     - :func:`lhotse.recipes.prepare_l2_arctic`
   * - LibriSpeech (including "mini")
@@ -99,6 +107,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_switchboard`
   * - TED-LIUM v3
     - :func:`lhotse.recipes.prepare_tedlium`
+  * - TIMIT
+    - :func:`lhotse.recipes.prepare_timit`
   * - VCTK
     - :func:`lhotse.recipes.prepare_vctk`
   * - YesNo
