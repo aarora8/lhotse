@@ -240,6 +240,8 @@ class SingleCutSampler(CutSampler):
                         "we'll return it anyway. "
                         "Consider increasing max_frames/max_cuts/max_duration."
                     )
+                    warnings.warn(str(next_cut.num_frames))
+                    warnings.warn(str(next_cut))
                     cuts.append(next_cut)
 
         self.diagnostics.keep(cuts)
