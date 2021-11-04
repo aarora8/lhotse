@@ -1,0 +1,4 @@
+Collecting werkzeug
+  Using cached Werkzeug-2.0.2-py3-none-any.whl (288 kB)
+Installing collected packages: werkzeug
+Successfully installed werkzeug-2.0.2
