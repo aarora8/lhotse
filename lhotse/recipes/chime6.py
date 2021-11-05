@@ -69,11 +69,6 @@ def prepare_chime(
         for audio_path in audio_paths:
           recording = Recording.from_file(audio_path)
           recordings.append(recording)
-        #  recording1 = copy.deepcopy(recording)
-        #   if len(recording.sources[0].channels) == 2:
-        #       recording.id = recording.id + '.L'
-        #       recording.sources[0].channels = [0]
-        #       recordings.append(recording)
 
         transcript_paths = check_and_rglob(transcript_dir, '*.json')
         for transcript_path in transcript_paths:
@@ -96,29 +91,56 @@ def prepare_chime(
 
                             for recording_id in recording_id_list:
                                 
-                                supervision_id = supervision_id + 1
-                                end_time, start_time, uttid, duration, transcription = get_supervision_details(x, supervision_id, speaker_id, session_id)
+                                
+                                end_time, start_time, duration, transcription = get_supervision_details(x, supervision_id, speaker_id, session_id)
+
                                 #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
-                                if end_time == None or start_time == None or uttid == None or duration == None or transcription == None:
+                                if end_time == None or start_time == None or duration == None or transcription == None:
                                     continue
 
                                 if end_time <= start_time:
                                     continue
-                                segment = SupervisionSegment(
-                                    id=uttid,
-                                    recording_id=recording_id,
-                                    start=start_time,
-                                    duration=duration,
-                                    channel=0,
-                                    language='English',
-                                    speaker=speaker_id,
-                                    text=transcription
-                                )
-                                supervisions.append(segment)
+
+                                if part == 'train':
+                                    for channel in [0, 1]:
+                                        supervision_id = supervision_id + 1
+                                        supervision_id_str = str(supervision_id).zfill(6)
+                                        uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
+                                        segment = SupervisionSegment(
+                                            id=uttid,
+                                            recording_id=recording_id,
+                                            start=start_time,
+                                            duration=duration,
+                                            channel=channel,
+                                            language='English',
+                                            speaker=speaker_id,
+                                            text=transcription
+                                        )
+                                        supervisions.append(segment)
+                                else:
+                                    channel = 0
+                                    supervision_id = supervision_id + 1
+                                    supervision_id_str = str(supervision_id).zfill(6)
+                                    uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
+                                    segment = SupervisionSegment(
+                                            id=uttid,
+                                            recording_id=recording_id,
+                                            start=start_time,
+                                            duration=duration,
+                                            channel=channel,
+                                            language='English',
+                                            speaker=speaker_id,
+                                            text=transcription
+                                        )
+                                    supervisions.append(segment)
 
         recording_set = RecordingSet.from_recordings(recordings)
         supervision_set = SupervisionSet.from_segments(supervisions)
-        validate_recordings_and_supervisions(recording_set, supervision_set)
+        recording_set_fixed, supervision_set_fixed = fix_manifests(
+                    recordings=RecordingSet.from_recordings(recording_set),
+                    supervisions=SupervisionSet.from_segments(supervision_set)
+                )
+        validate_recordings_and_supervisions(recording_set_fixed, supervision_set_fixed)
         if output_dir is not None:
             supervision_set.to_json(output_dir / f'supervisions_{part}.json')
             recording_set.to_json(output_dir / f'recordings_{part}.json')
@@ -137,10 +159,6 @@ def get_recording_id_list(mictype, session_id, speaker_id):
         return recording_id_list
 
     if mictype == 'original':
-        # recording_id = session_id + '_' + speaker_id + '.L'
-        # recording_id_list.append(recording_id)
-        # recording_id = session_id + '_' + speaker_id + '.R'
-        # recording_id_list.append(recording_id)
         recording_id = session_id + '_' + speaker_id
         recording_id_list.append(recording_id)
         return recording_id_list
@@ -167,6 +185,7 @@ def get_recording_id_list(mictype, session_id, speaker_id):
     
 #     return microphonetype_list
 
+
 def get_microphonetype_list(dataset_part):
     if dataset_part == 'dev':
         microphonetype_list = ['worn']
@@ -174,6 +193,7 @@ def get_microphonetype_list(dataset_part):
         microphonetype_list = ['worn']
     
     return microphonetype_list
+
 
 def hms_to_seconds(hms):
     hour = hms.split(':')[0]
@@ -219,15 +239,13 @@ def get_supervision_details(x, supervision_id, speaker_id, session_id):
                 .replace(',', '')\
                 .replace(':', '')\
                 .replace(';', '')\
-                .replace('!', '')
+                .replace('!', '').upper()
         #? remove multiple spaces
         transcription = " ".join(transcription.split())
-        supervision_id_str = str(supervision_id).zfill(6)
-        uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
     except Exception:
         return None, None, None, None, None
 
-    return end_time, start_time, uttid, duration, transcription
+    return end_time, start_time, duration, transcription
 
 
 # def main():
