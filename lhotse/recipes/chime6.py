@@ -24,6 +24,7 @@ import argparse
 import logging
 import sys
 import copy
+import re
 from datetime import timedelta
 from decimal import Decimal
 
@@ -92,8 +93,7 @@ def prepare_chime(
                             for recording_id in recording_id_list:
                                 
                                 
-                                end_time, start_time, duration, transcription = get_supervision_details(x, supervision_id, speaker_id, session_id)
-
+                                end_time, start_time, duration, transcription = get_supervision_details(x)
                                 #? In several utterances, there are inconsistency in the time stamp (the end time is earlier than the start time) We just ignored such utterances.
                                 if end_time == None or start_time == None or duration == None or transcription == None:
                                     continue
@@ -102,37 +102,54 @@ def prepare_chime(
                                     continue
 
                                 if part == 'train':
-                                    for channel in [0, 1]:
-                                        supervision_id = supervision_id + 1
-                                        supervision_id_str = str(supervision_id).zfill(6)
-                                        uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
-                                        segment = SupervisionSegment(
-                                            id=uttid,
-                                            recording_id=recording_id,
-                                            start=start_time,
-                                            duration=duration,
-                                            channel=channel,
-                                            language='English',
-                                            speaker=speaker_id,
-                                            text=transcription
-                                        )
-                                        supervisions.append(segment)
+                                   #? for close-talk train data create 2 copies of supervision, one for each channel
+                                   for channel in [0, 1]:
+                                       supervision_id = supervision_id + 1
+                                       supervision_id_str = str(supervision_id).zfill(6)
+                                       uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
+                                       segment = SupervisionSegment(
+                                           id=uttid,
+                                           recording_id=recording_id,
+                                           start=start_time,
+                                           duration=duration,
+                                           channel=channel,
+                                           language='English',
+                                           speaker=speaker_id,
+                                           text=transcription
+                                       )
+                                       supervisions.append(segment)
                                 else:
-                                    channel = 0
-                                    supervision_id = supervision_id + 1
-                                    supervision_id_str = str(supervision_id).zfill(6)
-                                    uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
-                                    segment = SupervisionSegment(
-                                            id=uttid,
-                                            recording_id=recording_id,
-                                            start=start_time,
-                                            duration=duration,
-                                            channel=channel,
-                                            language='English',
-                                            speaker=speaker_id,
-                                            text=transcription
-                                        )
-                                    supervisions.append(segment)
+                                   #? for dev data create only 1 copy of supervision
+                                   channel = 0
+                                   supervision_id = supervision_id + 1
+                                   supervision_id_str = str(supervision_id).zfill(6)
+                                   uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
+                                   segment = SupervisionSegment(
+                                           id=uttid,
+                                           recording_id=recording_id,
+                                           start=start_time,
+                                           duration=duration,
+                                           channel=channel,
+                                           language='English',
+                                           speaker=speaker_id,
+                                           text=transcription
+                                       )
+                                   supervisions.append(segment)
+                                # channel = 0
+                                # supervision_id = supervision_id + 1
+                                # supervision_id_str = str(supervision_id).zfill(6)
+                                # uttid =f'{speaker_id}_{session_id}_{supervision_id_str}'
+                                # segment = SupervisionSegment(
+                                #         id=uttid,
+                                #         recording_id=recording_id,
+                                #         start=start_time,
+                                #         duration=duration,
+                                #         channel=channel,
+                                #         language='English',
+                                #         speaker=speaker_id,
+                                #         text=transcription
+                                #     )
+                                # supervisions.append(segment)
 
         recording_set = RecordingSet.from_recordings(recordings)
         supervision_set = SupervisionSet.from_segments(supervisions)
@@ -187,6 +204,7 @@ def get_recording_id_list(mictype, session_id, speaker_id):
 
 
 def get_microphonetype_list(dataset_part):
+    #? list all microphones in the data parts (close-talk, far-field)
     if dataset_part == 'dev':
         microphonetype_list = ['worn']
     else:
@@ -196,6 +214,7 @@ def get_microphonetype_list(dataset_part):
 
 
 def hms_to_seconds(hms):
+    #? convert to seconds, e.g., 1:10:05.55 -> 3600 + 600 + 5.55 = 4205.55
     hour = hms.split(':')[0]
     minute = hms.split(':')[1]
     second = hms.split(':')[2]
@@ -223,7 +242,7 @@ def to_samples(time: str):
     return int(samples)
 
 
-def get_supervision_details(x, supervision_id, speaker_id, session_id):
+def get_supervision_details(x):
     try:
         start_time = x['start_time']
         end_time = x['end_time']
@@ -240,12 +259,27 @@ def get_supervision_details(x, supervision_id, speaker_id, session_id):
                 .replace(':', '')\
                 .replace(';', '')\
                 .replace('!', '').upper()
+
         #? remove multiple spaces
         transcription = " ".join(transcription.split())
+        transcription = transcription.split()
+
+        filtered_transcription = []
+        for word in transcription:
+            word = re.sub('[NOISE]','<UNK>', word)
+            word = re.sub('[LAUGHS]','<UNK>', word)
+            word = re.sub('[INAUDIBLE]','<UNK>', word)
+            word = re.sub('MHM','<UNK>', word)
+            word = re.sub('MM','<UNK>', word)
+            word = re.sub('MMM','<UNK>', word)
+            word = word.strip()
+            if word:
+                filtered_transcription.append(word)
+
     except Exception:
         return None, None, None, None, None
 
-    return end_time, start_time, duration, transcription
+    return end_time, start_time, duration, filtered_transcription
 
 
 # def main():

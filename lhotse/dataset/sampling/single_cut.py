@@ -234,14 +234,16 @@ class SingleCutSampler(CutSampler):
                 else:
                     # No. We'll warn the user that the constrains might be too tight,
                     # and return the cut anyway.
-                    warnings.warn(
-                        "The first cut drawn in batch collection violates "
-                        "the max_frames, max_cuts, or max_duration constraints - "
-                        "we'll return it anyway. "
-                        "Consider increasing max_frames/max_cuts/max_duration."
-                    )
-                    warnings.warn(str(next_cut.num_frames))
-                    warnings.warn(str(next_cut))
+                    #warnings.warn(
+                    #    "The first cut drawn in batch collection violates "
+                    #    "the max_frames, max_cuts, or max_duration constraints - "
+                    #    "we'll return it anyway. "
+                    #    "Consider increasing max_frames/max_cuts/max_duration."
+                    #)
+                    #warnings.warn(str(self.max_cuts))
+                    #warnings.warn(str(self.max_frames))
+                    #warnings.warn(str(next_cut.num_frames))
+                    #warnings.warn(str(next_cut))
                     cuts.append(next_cut)
 
         self.diagnostics.keep(cuts)
