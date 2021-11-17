@@ -275,7 +275,7 @@ def get_supervision_details(x):
             #     word = '<UNK>'
             # if word in  ('MHM', 'MM', 'MMM', 'HMM'):
             #     word = '<UNK>'
-            word = re.sub('[inaudible (\d+)]','[inaudible]', word)
+            word = re.sub('[inaudible +]','[inaudible]', word)
             if word in  ('[inaudible]', '[laughs]', '[noise]'):
                 word = '<unk>'
             if word in  ('mhm', 'mm', 'mmm', 'hmm'):
