@@ -19,6 +19,7 @@ from lhotse.audio import AudioSource, Recording, RecordingSet
 from lhotse.recipes.utils import manifests_exist, read_manifests_if_cached
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, Seconds, is_module_available
+import re
 import json
 import argparse
 import logging
@@ -274,6 +275,7 @@ def get_supervision_details(x):
             #     word = '<UNK>'
             # if word in  ('MHM', 'MM', 'MMM', 'HMM'):
             #     word = '<UNK>'
+            word = re.sub('[inaudible (\d+)]','[inaudible]', word)
             if word in  ('[inaudible]', '[laughs]', '[noise]'):
                 word = '<unk>'
             if word in  ('mhm', 'mm', 'mmm', 'hmm'):
