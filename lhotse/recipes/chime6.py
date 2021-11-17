@@ -249,13 +249,20 @@ def get_supervision_details(x):
         duration = end_time - start_time
 
         #? remove meta chars and convert to lower
+        # transcription = x['words'].replace('"', '')\
+        #         .replace('.', '')\
+        #         .replace('?', '')\
+        #         .replace(',', '')\
+        #         .replace(':', '')\
+        #         .replace(';', '')\
+        #         .replace('!', '').upper()
         transcription = x['words'].replace('"', '')\
                 .replace('.', '')\
                 .replace('?', '')\
                 .replace(',', '')\
                 .replace(':', '')\
                 .replace(';', '')\
-                .replace('!', '').upper()
+                .replace('!', '').lower()
 
         #? remove multiple spaces
         transcription = " ".join(transcription.split())
@@ -263,10 +270,14 @@ def get_supervision_details(x):
 
         filtered_transcription = []
         for word in transcription:
-            if word in  ('[INAUDIBLE]', '[LAUGHS]', '[NOISE]'):
-                word = '<UNK>'
-            if word in  ('MHM', 'MM', 'MMM', 'HMM'):
-                word = '<UNK>'
+            # if word in  ('[INAUDIBLE]', '[LAUGHS]', '[NOISE]'):
+            #     word = '<UNK>'
+            # if word in  ('MHM', 'MM', 'MMM', 'HMM'):
+            #     word = '<UNK>'
+            if word in  ('[inaudible]', '[laughs]', '[noise]'):
+                word = '<unk>'
+            if word in  ('mhm', 'mm', 'mmm', 'hmm'):
+                word = '<unk>'
             word = word.strip()
             if word:
                 filtered_transcription.append(word)
