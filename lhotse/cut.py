@@ -39,7 +39,6 @@ from lhotse.features import (
 )
 from lhotse.features.base import compute_global_stats
 from lhotse.features.io import FeaturesWriter, LilcomFilesWriter, LilcomHdf5Writer
-from lhotse.features.kaldifeat import KaldifeatExtractor
 from lhotse.serialization import Serializable
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import (
@@ -62,6 +61,7 @@ from lhotse.utils import (
     overlaps,
     overspans,
     perturb_num_samples,
+    rich_exception_info,
     split_sequence,
     uuid4,
 )
@@ -327,6 +327,60 @@ class Cut:
 
         features = np.flip(self.load_features().transpose(1, 0), 0)
         return plt.matshow(features)
+
+    def plot_alignment(self, alignment_type: str = "word"):
+        """
+        Display the alignment on top of a spectrogram. Requires matplotlib to be installed.
+        """
+        import matplotlib.pyplot as plt
+        from lhotse import Fbank
+        from lhotse.utils import compute_num_frames
+
+        assert (
+            len(self.supervisions) == 1
+        ), "Cannot plot alignment: there has to be exactly one supervision in a Cut."
+        sup = self.supervisions[0]
+        assert (
+            sup.alignment is not None and alignment_type in sup.alignment
+        ), f"Cannot plot alignment: missing alignment field or alignment type '{alignment_type}'"
+
+        fbank = Fbank()
+
+        feats = self.compute_features(fbank)
+        speaker = sup.speaker
+        language = sup.language
+
+        fig = plt.matshow(np.flip(feats.transpose(1, 0), 0))
+        plt.title(
+            "Cut ID:" + self.id + ", Speaker:" + speaker + ", Language:" + language
+        )
+        plt.tick_params(
+            axis="both",
+            which="major",
+            labelbottom=True,
+            labeltop=False,
+            bottom=True,
+            top=False,
+        )
+
+        for idx, item in enumerate(sup.alignment[alignment_type]):
+            is_even = bool(idx % 2)
+            end_frame = compute_num_frames(
+                item.end,
+                frame_shift=fbank.frame_shift,
+                sampling_rate=self.sampling_rate,
+            )
+            plt.text(
+                end_frame - 4,
+                70 if is_even else 45,
+                item.symbol,
+                fontsize=12,
+                color="w",
+                rotation="vertical",
+            )
+            plt.axvline(end_frame, color="k")
+
+        plt.show()
 
     def trim_to_supervisions(
         self,
@@ -762,6 +816,7 @@ class MonoCut(Cut):
             else self.recording.sampling_rate
         )
 
+    @rich_exception_info
     def load_features(self) -> Optional[np.ndarray]:
         """
         Load the features from the underlying storage and cut them to the relevant
@@ -780,6 +835,7 @@ class MonoCut(Cut):
             return feats
         return None
 
+    @rich_exception_info
     def load_audio(self) -> Optional[np.ndarray]:
         """
         Load the audio by locating the appropriate recording in the supplied RecordingSet.
@@ -1863,6 +1919,7 @@ class MixedCut(Cut):
             ],
         )
 
+    @rich_exception_info
     def load_features(self, mixed: bool = True) -> Optional[np.ndarray]:
         """
         Loads the features of the source cuts and mixes them on-the-fly.
@@ -1930,6 +1987,7 @@ class MixedCut(Cut):
         else:
             return mixer.unmixed_feats
 
+    @rich_exception_info
     def load_audio(self, mixed: bool = True) -> Optional[np.ndarray]:
         """
         Loads the audios of the source cuts and mix them on-the-fly.
@@ -3729,18 +3787,18 @@ def mix(
     preserve_id: Optional[str] = None,
 ) -> MixedCut:
     """
-    Overlay, or mix, two cuts. Optionally the `mixed_in_cut` may be shifted by `offset` seconds
+    Overlay, or mix, two cuts. Optionally the ``mixed_in_cut`` may be shifted by ``offset`` seconds
     and scaled down (positive SNR) or scaled up (negative SNR).
     Returns a MixedCut, which contains both cuts and the mix information.
-    The actual feature mixing is performed during the call to ``MixedCut.load_features()``.
+    The actual feature mixing is performed during the call to :meth:`~MixedCut.load_features`.
 
     :param reference_cut: The reference cut for the mix - offset and snr are specified w.r.t this cut.
     :param mixed_in_cut: The mixed-in cut - it will be offset and rescaled to match the offset and snr parameters.
     :param offset: How many seconds to shift the ``mixed_in_cut`` w.r.t. the ``reference_cut``.
-    :param snr: Desired SNR of the `right_cut` w.r.t. the `left_cut` in the mix.
+    :param snr: Desired SNR of the ``right_cut`` w.r.t. the ``left_cut`` in the mix.
     :param preserve_id: optional string ("left", "right"). when specified, append will preserve the cut id
         of the left- or right-hand side argument. otherwise, a new random id is generated.
-    :return: A MixedCut instance.
+    :return: A :class:`~MixedCut` instance.
     """
     if (
         any(isinstance(cut, PaddingCut) for cut in (reference_cut, mixed_in_cut))
