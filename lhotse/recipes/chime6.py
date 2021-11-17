@@ -22,9 +22,6 @@ from lhotse.utils import Pathlike, Seconds, is_module_available
 import json
 import argparse
 import logging
-import sys
-import copy
-import re
 from datetime import timedelta
 from decimal import Decimal
 
@@ -266,12 +263,10 @@ def get_supervision_details(x):
 
         filtered_transcription = []
         for word in transcription:
-            word = re.sub('[NOISE]','<UNK>', word)
-            word = re.sub('[LAUGHS]','<UNK>', word)
-            word = re.sub('[INAUDIBLE]','<UNK>', word)
-            word = re.sub('MHM','<UNK>', word)
-            word = re.sub('MM','<UNK>', word)
-            word = re.sub('MMM','<UNK>', word)
+            if word in  ('[INAUDIBLE]', '[LAUGHS]', '[NOISE]'):
+                word = '<UNK>'
+            if word in  ('MHM', 'MM', 'MMM', 'HMM'):
+                word = '<UNK>'
             word = word.strip()
             if word:
                 filtered_transcription.append(word)
