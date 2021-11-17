@@ -274,6 +274,7 @@ def get_supervision_details(x):
     except Exception:
         return None, None, None, None, None
 
+    filtered_transcription = " ".join(filtered_transcription)
     return end_time, start_time, duration, filtered_transcription
 
 
