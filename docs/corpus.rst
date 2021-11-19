@@ -47,6 +47,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_adept`
   * - Aishell
     - :func:`lhotse.recipes.prepare_aishell`
+  * - AISHELL-4
+    - :func:`lhotse.recipes.prepare_aishell4`
   * - AMI
     - :func:`lhotse.recipes.prepare_ami`
   * - BABEL
@@ -85,6 +87,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_hifitts`
   * - L2 Arctic
     - :func:`lhotse.recipes.prepare_l2_arctic`
+  * - LibriCSS
+    - :func:`lhotse.recipes.prepare_libricss`
   * - LibriSpeech (including "mini")
     - :func:`lhotse.recipes.prepare_librispeech`
   * - LibriTTS
@@ -103,6 +107,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_musan`
   * - National Speech Corpus (Singaporean English)
     - :func:`lhotse.recipes.prepare_nsc`
+  * - RIRs and Noises Corpus (OpenSLR 28)
+    - :func:`lhotse.recipes.prepare_rir_noise`
   * - Switchboard
     - :func:`lhotse.recipes.prepare_switchboard`
   * - TED-LIUM v3
@@ -111,6 +117,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_timit`
   * - VCTK
     - :func:`lhotse.recipes.prepare_vctk`
+  * - VoxCeleb
+    - :func:`lhotse.recipes.prepare_voxceleb`
   * - YesNo
     - :func:`lhotse.recipes.prepare_yesno`
 

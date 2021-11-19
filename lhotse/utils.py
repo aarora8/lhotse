@@ -1,3 +1,4 @@
+import functools
 import logging
 import math
 import random
@@ -34,6 +35,8 @@ Decibels = float
 INT16MAX = 32768
 EPSILON = 1e-10
 LOG_EPSILON = math.log(EPSILON)
+DEFAULT_PADDING_VALUE = 0  # used for custom attrs
+
 
 # This is a utility that generates uuid4's and is set when the user calls
 # the ``fix_random_seed`` function.
@@ -573,6 +576,19 @@ def lens_to_mask(lens: torch.IntTensor) -> torch.Tensor:
     for i, num in enumerate(lens):
         mask[i, :num] = 1.0
     return mask
+
+
+def rich_exception_info(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            raise type(e)(
+                f"{e}\n[extra info] When calling: {fn.__qualname__}(args={args} kwargs={kwargs})"
+            )
+
+    return wrapper
 
 
 class NonPositiveEnergyError(ValueError):

@@ -1,5 +1,6 @@
 from .adept import *
 from .aishell import *
+from .aishell4 import *
 from .ami import *
 from .babel import *
 from .broadcast_news import *
@@ -19,6 +20,7 @@ from .gigaspeech import *
 from .heroico import *
 from .hifitts import *
 from .l2_arctic import *
+from .libricss import *
 from .librimix import *
 from .librispeech import *
 from .libritts import *
@@ -27,8 +29,10 @@ from .mls import *
 from .mtedx import *
 from .musan import *
 from .nsc import *
+from .rir_noise import *
 from .switchboard import *
 from .tedlium import *
 from .timit import *
 from .vctk import *
+from .voxceleb import *
 from .yesno import *
