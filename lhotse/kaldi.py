@@ -342,6 +342,11 @@ def make_wavscp_channel_string_map(
             for channel in source.channels:
                 audios[channel] = source.source
             return audios
+        elif Path(source.source).suffix == ".wav" and len(source.channels) > 1:
+            audios = dict()
+            for channel in source.channels:
+                audios[channel] = f"sox {source.source} -t wav - remix {channel+1} |"
+            return audios
         elif Path(source.source).suffix == ".sph":
             # we will do this specifically using the sph2pipe because
             # ffmpeg does not support shorten compression, which is sometimes
