@@ -78,6 +78,18 @@ def prepare_chime(
                         if '[redacted]' not in x['words']:
                             session_id = x['session_id']
                             speaker_id = x['speaker']
+                            # remove possibly bad sessions (P11_S03, P52_S19, P53_S24, P54_S24)
+                            # see http://spandh.dcs.shef.ac.uk/chime_challenge/data.html for more details
+
+                            if speaker_id == 'P11' and session_id == 'S03':
+                                continue
+                            if speaker_id == 'P52' and session_id == 'S19':
+                                continue
+                            if speaker_id == 'P53' and session_id == 'S24':
+                                continue
+                            if speaker_id == 'P54' and session_id == 'S24':
+                                continue
+                            
                             if microphonetype == 'worn':
                                 mictype = 'original'
                                 recording_id_list = get_recording_id_list(mictype, session_id, speaker_id)
@@ -264,7 +276,7 @@ def get_supervision_details(x):
                 .replace(':', '')\
                 .replace(';', '')\
                 .replace('!', '').lower()
-
+        
         #? remove multiple spaces
         transcription = " ".join(transcription.split())
         transcription = transcription.split()
@@ -275,11 +287,17 @@ def get_supervision_details(x):
             #     word = '<UNK>'
             # if word in  ('MHM', 'MM', 'MMM', 'HMM'):
             #     word = '<UNK>'
-            word = re.sub('[inaudible +]','[inaudible]', word)
-            if word in  ('[inaudible]', '[laughs]', '[noise]'):
+            if word in  ('[inaudible]', '[laughs]', '[noise]', '[inaudible'):
                 word = '<unk>'
             if word in  ('mhm', 'mm', 'mmm', 'hmm'):
                 word = '<unk>'
+            # this regex is added to remove words likle [inaudible 0:02:34.24]
+            # match = re.search(r'[0-9]+', word[:-1])
+            # if match and word[-1] == ']':
+            #     word = '<unk>'
+            if word[:-1].isdigit() and word[-1] == ']':
+                word = '<unk>'
+            
             word = word.strip()
             if word:
                 filtered_transcription.append(word)
