@@ -258,20 +258,20 @@ def get_supervision_details(x):
         duration = end_time - start_time
 
         # remove meta chars and convert to lower
-        transcription = x['words'].replace('"', '')\
-                .replace('.', '')\
-                .replace('?', '')\
-                .replace(',', '')\
-                .replace(':', '')\
-                .replace(';', '')\
-                .replace('!', '').upper()
         # transcription = x['words'].replace('"', '')\
         #         .replace('.', '')\
         #         .replace('?', '')\
         #         .replace(',', '')\
         #         .replace(':', '')\
         #         .replace(';', '')\
-        #         .replace('!', '').lower()
+        #         .replace('!', '').upper()
+        transcription = x['words'].replace('"', '')\
+                .replace('.', '')\
+                .replace('?', '')\
+                .replace(',', '')\
+                .replace(':', '')\
+                .replace(';', '')\
+                .replace('!', '').lower()
         
         # remove multiple spaces
         transcription = " ".join(transcription.split())
@@ -284,27 +284,27 @@ def get_supervision_details(x):
             # if word in  ('MHM', 'MM', 'MMM', 'HMM'):
             #     word = '<UNK>'
 
-            if word == '[INAUDIBLE':
-                word = '[INAUDIBLE]'
-            if word ==  'MM-':
-                word = 'MM'
-            if word[:-1].isdigit() and word[-1] == ']':
-                continue
-            if word.isdigit():
-                continue
-            if word in  ('-', ' -', '- ', ' - '):
-                continue
-
-            # if word == '[inaudible':
-            #     word = '[inaudible]'
-            # if word ==  'mm-':
-            #     word = 'mm'
+            # if word == '[INAUDIBLE':
+            #     word = '[INAUDIBLE]'
+            # if word ==  'MM-':
+            #     word = 'MM'
             # if word[:-1].isdigit() and word[-1] == ']':
             #     continue
             # if word.isdigit():
             #     continue
             # if word in  ('-', ' -', '- ', ' - '):
             #     continue
+
+            if word == '[inaudible':
+                word = '[inaudible]'
+            if word ==  'mm-':
+                word = 'mm'
+            if word[:-1].isdigit() and word[-1] == ']':
+                continue
+            if word.isdigit():
+                continue
+            if word in  ('-', ' -', '- ', ' - '):
+                continue
             
             word = word.strip()
             if word:
