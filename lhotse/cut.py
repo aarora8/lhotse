@@ -1,3 +1,4 @@
+import itertools
 import logging
 import random
 import warnings
@@ -66,6 +67,7 @@ from lhotse.utils import (
     rich_exception_info,
     split_sequence,
     uuid4,
+    deprecated,
 )
 
 # One of the design principles for Cuts is a maximally "lazy" implementation, e.g. when mixing Cuts,
@@ -160,6 +162,7 @@ class Cut:
         >>> cut_24k = cut.resample(24000)
         >>> cut_sp = cut.perturb_speed(1.1)
         >>> cut_vp = cut.perturb_volume(2.)
+        >>> cut_rvb = cut.reverb_rir(rir_recording)
 
     .. note::
         All cut transformations are performed lazily, on-the-fly, upon calling ``load_audio`` or ``load_features``.
@@ -223,6 +226,7 @@ class Cut:
     perturb_speed: Callable
     perturb_tempo: Callable
     perturb_volume: Callable
+    reverb_rir: Callable
     map_supervisions: Callable
     filter_supervisions: Callable
     with_features_path_prefix: Callable
@@ -487,7 +491,28 @@ class Cut:
                     )
         return indexed
 
+    @deprecated(
+        "Cut.compute_and_store_recording will be removed in a future release. Please use save_audio() instead."
+    )
     def compute_and_store_recording(
+        self,
+        storage_path: Pathlike,
+        augment_fn: Optional[AugmentFn] = None,
+    ) -> "MonoCut":
+        """
+        Store this cut's waveform as audio recording to disk.
+
+        :param storage_path: The path to location where we will store the audio recordings.
+        :param augment_fn: an optional callable used for audio augmentation.
+            Be careful with the types of augmentations used: if they modify
+            the start/end/duration times of the cut and its supervisions,
+            you will end up with incorrect supervision information when using this API.
+            E.g. for speed perturbation, use ``CutSet.perturb_speed()`` instead.
+        :return: a new MonoCut instance.
+        """
+        return self.save_audio(storage_path=storage_path, augment_fn=augment_fn)
+
+    def save_audio(
         self,
         storage_path: Pathlike,
         augment_fn: Optional[AugmentFn] = None,
@@ -1260,6 +1285,53 @@ class MonoCut(Cut):
             supervisions=supervisions_vp,
         )
 
+    def reverb_rir(
+        self,
+        rir_recording: "Recording",
+        normalize_output: bool = True,
+        affix_id: bool = True,
+    ) -> "MonoCut":
+        """
+        Return a new ``MonoCut`` that will convolve the audio with the provided impulse response.
+
+        :param rir_recording: The impulse response to use for convolving.
+        :param normalize_output: When true, output will be normalized to have energy as input.
+        :param affix_id: When true, we will modify the ``MonoCut.id`` field
+            by affixing it with "_rvb".
+        :return: a modified copy of the current ``MonoCut``.
+        """
+        # Pre-conditions
+        assert (
+            self.has_recording
+        ), "Cannot apply reverberation on a MonoCut without Recording."
+        if self.has_features:
+            logging.warning(
+                "Attempting to reverberate a MonoCut that references pre-computed features. "
+                "The feature manifest will be detached, as we do not support feature-domain "
+                "reverberation."
+            )
+            self.features = None
+        # Actual reverberation.
+        recording_rvb = self.recording.reverb_rir(
+            rir_recording=rir_recording,
+            normalize_output=normalize_output,
+            affix_id=affix_id,
+        )
+        # Match the supervision's id (and it's underlying recording id).
+        supervisions_rvb = [
+            s.reverb_rir(
+                affix_id=affix_id,
+            )
+            for s in self.supervisions
+        ]
+
+        return fastcopy(
+            self,
+            id=f"{self.id}_rvb" if affix_id else self.id,
+            recording=recording_rvb,
+            supervisions=supervisions_rvb,
+        )
+
     def map_supervisions(
         self, transform_fn: Callable[[SupervisionSegment], SupervisionSegment]
     ) -> Cut:
@@ -1576,6 +1648,25 @@ class PaddingCut(Cut):
 
         return fastcopy(self, id=f"{self.id}_vp{factor}" if affix_id else self.id)
 
+    def reverb_rir(
+        self,
+        rir_recording: "Recording",
+        normalize_output: bool = True,
+        affix_id: bool = True,
+    ) -> "PaddingCut":
+        """
+        Return a new ``PaddingCut`` that will "mimic" the effect of reverberation with impulse response
+        on original samples.
+
+        :param rir_recording: The impulse response to use for convolving.
+        :param normalize_output: When true, output will be normalized to have energy as input.
+        :param affix_id: When true, we will modify the ``PaddingCut.id`` field
+            by affixing it with "_rvb".
+        :return: a modified copy of the current ``PaddingCut``.
+        """
+
+        return fastcopy(self, id=f"{self.id}_rvb" if affix_id else self.id)
+
     def drop_features(self) -> "PaddingCut":
         """Return a copy of the current :class:`.PaddingCut`, detached from ``features``."""
         assert (
@@ -1847,9 +1938,13 @@ class MixedCut(Cut):
         # We need to pad it.
         left_padding = self.tracks[non_padding_idx].offset
         padded_duration = self.duration
-        pad_value = [t.cut for t in self.tracks if isinstance(t.cut, PaddingCut)][
+        pad_value_dict = [t.cut for t in self.tracks if isinstance(t.cut, PaddingCut)][
             0
-        ].custom[name]
+        ].custom
+        if pad_value_dict is not None and name in pad_value_dict:
+            pad_value = pad_value_dict[name]
+        else:
+            pad_value = DEFAULT_PADDING_VALUE
 
         return pad_array(
             array,
@@ -2130,6 +2225,46 @@ class MixedCut(Cut):
                 fastcopy(
                     track,
                     cut=track.cut.perturb_volume(factor=factor, affix_id=affix_id),
+                )
+                for track in self.tracks
+            ],
+        )
+
+    def reverb_rir(
+        self,
+        rir_recording: "Recording",
+        normalize_output: bool = True,
+        affix_id: bool = True,
+    ) -> "MixedCut":
+        """
+        Return a new ``MixedCut`` that will convolve the audio with the provided impulse response.
+
+        :param rir_recording: The impulse response to use for convolving.
+        :param normalize_output: When true, output will be normalized to have energy as input.
+        :param affix_id: When true, we will modify the ``MixedCut.id`` field
+            by affixing it with "_rvb".
+        :return: a modified copy of the current ``MixedCut``.
+        """
+        # Pre-conditions
+        assert (
+            self.has_recording
+        ), "Cannot apply reverberation on a MixedCut without Recording."
+        if self.has_features:
+            logging.warning(
+                "Attempting to reverberate a MixedCut that references pre-computed features. "
+                "The feature manifest(s) will be detached, as we do not support feature-domain "
+                "reverberation."
+            )
+        return MixedCut(
+            id=f"{self.id}_rvb" if affix_id else self.id,
+            tracks=[
+                fastcopy(
+                    track,
+                    cut=track.cut.reverb_rir(
+                        rir_recording=rir_recording,
+                        normalize_output=normalize_output,
+                        affix_id=affix_id,
+                    ),
                 )
                 for track in self.tracks
             ],
@@ -2576,10 +2711,12 @@ class CutSet(Serializable, Sequence[Cut]):
         >>> cuts_sp = cuts.perturb_speed(factor=1.1)
         >>> cuts_vp = cuts.perturb_volume(factor=2.)
         >>> cuts_24k = cuts.resample(24000)
+        >>> cuts_rvb = cuts.reverb_rir(rir_recordings)
 
     .. caution::
         If the :class:`.CutSet` contained :class:`~lhotse.features.base.Features` manifests, they will be
-        detached after performing audio augmentations such as :meth:`.CutSet.perturb_speed` or :meth:`.CutSet.resample` or :meth:`.CutSet.perturb_volume`.
+        detached after performing audio augmentations such as :meth:`.CutSet.perturb_speed`,
+        :meth:`.CutSet.resample`, :meth:`.CutSet.perturb_volume`, or :meth:`.CutSet.reverb_rir`.
 
     :class:`~lhotse.cut.CutSet` offers parallel feature extraction capabilities
     (see `meth`:.CutSet.compute_and_store_features: for details),
@@ -2641,7 +2778,9 @@ class CutSet(Serializable, Sequence[Cut]):
         recordings: Optional[RecordingSet] = None,
         supervisions: Optional[SupervisionSet] = None,
         features: Optional[FeatureSet] = None,
+        output_path: Optional[Pathlike] = None,
         random_ids: bool = False,
+        lazy: bool = False,
     ) -> "CutSet":
         """
         Create a CutSet from any combination of supervision, feature and recording manifests.
@@ -2657,66 +2796,28 @@ class CutSet(Serializable, Sequence[Cut]):
         :param recordings: an optional :class:`~lhotse.audio.RecordingSet` manifest.
         :param supervisions: an optional :class:`~lhotse.supervision.SupervisionSet` manifest.
         :param features: an optional :class:`~lhotse.features.base.FeatureSet` manifest.
+        :param output_path: an optional path where the :class:`.CutSet` is stored.
         :param random_ids: boolean, should the cut IDs be randomized. By default, use the recording ID
             with a loop index and a channel idx, i.e. "{recording_id}-{idx}-{channel}")
+        :param lazy: boolean, when ``True``, output_path must be provided
         :return: a new :class:`.CutSet` instance.
         """
-        assert (
-            features is not None or recordings is not None
-        ), "At least one of 'features' or 'recordings' has to be provided."
-        sup_ok, feat_ok, rec_ok = (
-            supervisions is not None,
-            features is not None,
-            recordings is not None,
-        )
-        if feat_ok:
-            # Case I: Features are provided.
-            # Use features to determine the cut boundaries and attach recordings and supervisions as available.
-            return CutSet.from_cuts(
-                MonoCut(
-                    id=str(uuid4())
-                    if random_ids
-                    else f"{feats.recording_id}-{idx}-{feats.channels}",
-                    start=feats.start,
-                    duration=feats.duration,
-                    channel=feats.channels,
-                    features=feats,
-                    recording=recordings[feats.recording_id] if rec_ok else None,
-                    # The supervisions' start times are adjusted if the features object starts at time other than 0s.
-                    supervisions=list(
-                        supervisions.find(
-                            recording_id=feats.recording_id,
-                            channel=feats.channels,
-                            start_after=feats.start,
-                            end_before=feats.end,
-                            adjust_offset=True,
-                        )
-                    )
-                    if sup_ok
-                    else [],
-                )
-                for idx, feats in enumerate(features)
+        if lazy:
+            return create_cut_set_lazy(
+                recordings=recordings,
+                supervisions=supervisions,
+                features=features,
+                output_path=output_path,
+                random_ids=random_ids,
             )
-        # Case II: Recordings are provided (and features are not).
-        # Use recordings to determine the cut boundaries.
-        return CutSet.from_cuts(
-            MonoCut(
-                id=str(uuid4()) if random_ids else f"{recording.id}-{ridx}-{cidx}",
-                start=0,
-                duration=recording.duration,
-                channel=channel,
-                recording=recording,
-                supervisions=list(
-                    supervisions.find(recording_id=recording.id, channel=channel)
-                )
-                if sup_ok
-                else [],
+        else:
+            return create_cut_set_eager(
+                recordings=recordings,
+                supervisions=supervisions,
+                features=features,
+                output_path=output_path,
+                random_ids=random_ids,
             )
-            for ridx, recording in enumerate(recordings)
-            # A single cut always represents a single channel. When a recording has multiple channels,
-            # we create a new cut for each channel separately.
-            for cidx, channel in enumerate(recording.channel_ids)
-        )
 
     @staticmethod
     def from_dicts(data: Iterable[dict]) -> "CutSet":
@@ -3306,6 +3407,36 @@ class CutSet(Serializable, Sequence[Cut]):
             lambda cut: cut.perturb_volume(factor=factor, affix_id=affix_id)
         )
 
+    def reverb_rir(
+        self,
+        rir_recordings: "RecordingSet",
+        normalize_output: bool = True,
+        affix_id: bool = True,
+    ) -> "CutSet":
+        """
+        Return a new :class:`~lhotse.cut.CutSet` that contains original cuts convolved with
+        randomly chosen impulse responses from `rir_recordings`. It requires the recording manifests to be present.
+        If the feature manifests are attached, they are dropped.
+        The supervision manifests remain the same.
+
+        :param rir_recordings: RecordingSet containing the room impulse responses.
+        :param normalize_output: When true, output will be normalized to have energy as input.
+        :param affix_id: Should we modify the ID (useful if both versions of the same
+            cut are going to be present in a single manifest).
+        :return: a modified copy of the ``CutSet``.
+        """
+        rir_recordings = list(rir_recordings)
+        return CutSet.from_cuts(
+            [
+                cut.reverb_rir(
+                    rir_recording=random.choice(rir_recordings),
+                    normalize_output=normalize_output,
+                    affix_id=affix_id,
+                )
+                for cut in self
+            ]
+        )
+
     def mix(
         self,
         cuts: "CutSet",
@@ -3727,7 +3858,49 @@ class CutSet(Serializable, Sequence[Cut]):
 
         return CutSet.from_cuts(cuts_with_feats)
 
+    @deprecated(
+        "CutSet.compute_and_store_recordings will be removed in a future release. Please use save_audios() instead."
+    )
     def compute_and_store_recordings(
+        self,
+        storage_path: Pathlike,
+        num_jobs: Optional[int] = None,
+        executor: Optional[Executor] = None,
+        augment_fn: Optional[AugmentFn] = None,
+        progress_bar: bool = True,
+    ) -> "CutSet":
+        """
+        Store waveforms of all cuts as audio recordings to disk.
+
+        :param storage_path: The path to location where we will store the audio recordings.
+            For each cut, a sub-directory will be created that starts with the first 3
+            characters of the cut's ID. The audio recording is then stored in the sub-directory
+            using the cut ID as filename and '.flac' as suffix.
+        :param num_jobs: The number of parallel processes used to store the audio recordings.
+            We will internally split the CutSet into this many chunks
+            and process each chunk in parallel.
+        :param augment_fn: an optional callable used for audio augmentation.
+            Be careful with the types of augmentations used: if they modify
+            the start/end/duration times of the cut and its supervisions,
+            you will end up with incorrect supervision information when using this API.
+            E.g. for speed perturbation, use ``CutSet.perturb_speed()`` instead.
+        :param executor: when provided, will be used to parallelize the process.
+            By default, we will instantiate a ProcessPoolExecutor.
+            Learn more about the ``Executor`` API at
+            https://lhotse.readthedocs.io/en/latest/parallelism.html
+        :param progress_bar: Should a progress bar be displayed (automatically turned off
+            for parallel computation).
+        :return: Returns a new ``CutSet``.
+        """
+        return self.save_audios(
+            storage_path,
+            num_jobs=num_jobs,
+            executor=executor,
+            augment_fn=augment_fn,
+            progress_bar=progress_bar,
+        )
+
+    def save_audios(
         self,
         storage_path: Pathlike,
         num_jobs: Optional[int] = None,
@@ -3790,7 +3963,7 @@ class CutSet(Serializable, Sequence[Cut]):
                 )
             return CutSet.from_cuts(
                 progress(
-                    cut.compute_and_store_recording(
+                    cut.save_audio(
                         storage_path=file_storage_path(cut, storage_path),
                         augment_fn=augment_fn,
                     )
@@ -3809,7 +3982,7 @@ class CutSet(Serializable, Sequence[Cut]):
         # Each worker runs the non-parallel version of this function inside.
         futures = [
             executor.submit(
-                CutSet.compute_and_store_recordings,
+                CutSet.save_audios,
                 cs,
                 storage_path=storage_path,
                 augment_fn=augment_fn,
@@ -3943,12 +4116,19 @@ class CutSet(Serializable, Sequence[Cut]):
         return iter(self.cuts.values())
 
     def __add__(self, other: "CutSet") -> "CutSet":
-        merged_cuts = {**self.cuts, **other.cuts}
-        assert len(merged_cuts) == len(self.cuts) + len(other.cuts), (
+        if self.is_lazy or other.is_lazy:
+            # Lazy manifests are specially combined
+            from lhotse.serialization import LazyIteratorChain
+
+            return CutSet(cuts=LazyIteratorChain(self.cuts, other.cuts))
+
+        # Eager manifests are just merged like standard dicts.
+        merged = {**self.cuts, **other.cuts}
+        assert len(merged) == len(self.cuts) + len(other.cuts), (
             f"Conflicting IDs when concatenating CutSets! "
-            f"Failed check: {len(merged_cuts)} == {len(self.cuts)} + {len(other.cuts)}"
+            f"Failed check: {len(merged)} == {len(self.cuts)} + {len(other.cuts)}"
         )
-        return CutSet(cuts={**self.cuts, **other.cuts})
+        return CutSet(cuts=merged)
 
 
 def make_windowed_cuts_from_features(
@@ -4317,3 +4497,235 @@ def compute_supervisions_frame_mask(
             )
             mask[st:et] = 1.0
     return mask
+
+
+def create_cut_set_eager(
+    recordings: Optional[RecordingSet] = None,
+    supervisions: Optional[SupervisionSet] = None,
+    features: Optional[FeatureSet] = None,
+    output_path: Optional[Pathlike] = None,
+    random_ids: bool = False,
+) -> CutSet:
+    """
+    Create a :class:`.CutSet` from any combination of supervision, feature and recording manifests.
+    At least one of ``recordings`` or ``features`` is required.
+
+    The created cuts will be of type :class:`.MonoCut`, even when the recordings have multiple channels.
+    The :class:`.MonoCut` boundaries correspond to those found in the ``features``, when available,
+    otherwise to those found in the ``recordings``.
+
+    When ``supervisions`` are provided, we'll be searching them for matching recording IDs
+    and attaching to created cuts, assuming they are fully within the cut's time span.
+
+    :param recordings: an optional :class:`~lhotse.audio.RecordingSet` manifest.
+    :param supervisions: an optional :class:`~lhotse.supervision.SupervisionSet` manifest.
+    :param features: an optional :class:`~lhotse.features.base.FeatureSet` manifest.
+    :param output_path: an optional path where the :class:`.CutSet` is stored.
+    :param random_ids: boolean, should the cut IDs be randomized. By default, use the recording ID
+        with a loop index and a channel idx, i.e. "{recording_id}-{idx}-{channel}")
+    :return: a new :class:`.CutSet` instance.
+    """
+    assert (
+        features is not None or recordings is not None
+    ), "At least one of 'features' or 'recordings' has to be provided."
+    sup_ok, feat_ok, rec_ok = (
+        supervisions is not None,
+        features is not None,
+        recordings is not None,
+    )
+    if feat_ok:
+        # Case I: Features are provided.
+        # Use features to determine the cut boundaries and attach recordings and supervisions as available.
+        cuts = CutSet.from_cuts(
+            MonoCut(
+                id=str(uuid4())
+                if random_ids
+                else f"{feats.recording_id}-{idx}-{feats.channels}",
+                start=feats.start,
+                duration=feats.duration,
+                channel=feats.channels,
+                features=feats,
+                recording=recordings[feats.recording_id] if rec_ok else None,
+                # The supervisions' start times are adjusted if the features object starts at time other than 0s.
+                supervisions=list(
+                    supervisions.find(
+                        recording_id=feats.recording_id,
+                        channel=feats.channels,
+                        start_after=feats.start,
+                        end_before=feats.end,
+                        adjust_offset=True,
+                    )
+                )
+                if sup_ok
+                else [],
+            )
+            for idx, feats in enumerate(features)
+        )
+    else:
+        # Case II: Recordings are provided (and features are not).
+        # Use recordings to determine the cut boundaries.
+        cuts = CutSet.from_cuts(
+            MonoCut(
+                id=str(uuid4()) if random_ids else f"{recording.id}-{ridx}-{cidx}",
+                start=0,
+                duration=recording.duration,
+                channel=channel,
+                recording=recording,
+                supervisions=list(
+                    supervisions.find(recording_id=recording.id, channel=channel)
+                )
+                if sup_ok
+                else [],
+            )
+            for ridx, recording in enumerate(recordings)
+            # A single cut always represents a single channel. When a recording has multiple channels,
+            # we create a new cut for each channel separately.
+            for cidx, channel in enumerate(recording.channel_ids)
+        )
+    if output_path is not None:
+        cuts.to_file(output_path)
+    return cuts
+
+
+def create_cut_set_lazy(
+    output_path: Pathlike,
+    recordings: Optional[RecordingSet] = None,
+    supervisions: Optional[SupervisionSet] = None,
+    features: Optional[FeatureSet] = None,
+    random_ids: bool = False,
+) -> CutSet:
+    """
+    Create a :class:`.CutSet` from any combination of supervision, feature and recording manifests.
+    At least one of ``recordings`` or ``features`` is required.
+
+    This method is the "lazy" variant, which allows to create a :class:`.CutSet` with a minimal memory usage.
+    It has some extra requirements:
+
+        - The user must provide an ``output_path``, where we will write the cuts as
+            we create them. We'll return a lazily-opened :class:`CutSet` from that file.
+
+        - ``recordings`` and ``features`` (if both provided) have to be of equal length
+            and sorted by ``recording_id`` attribute of their elements.
+
+        - ``supervisions`` (if provided) have to be sorted by ``recording_id``;
+            note that there may be multiple supervisions with the same ``recording_id``,
+            which is allowed.
+
+    In addition, to prepare cuts in a fully memory-efficient way, make sure that:
+
+        - All input manifests are stored in JSONL format and opened lazily
+            with ``<manifest_class>.from_jsonl_lazy(path)`` method.
+
+    For more details, see :func:`.create_cut_set_eager`.
+
+    :param output_path: path to which we will write the cuts.
+    :param recordings: an optional :class:`~lhotse.audio.RecordingSet` manifest.
+    :param supervisions: an optional :class:`~lhotse.supervision.SupervisionSet` manifest.
+    :param features: an optional :class:`~lhotse.features.base.FeatureSet` manifest.
+    :param random_ids: boolean, should the cut IDs be randomized. By default, use the recording ID
+        with a loop index and a channel idx, i.e. "{recording_id}-{idx}-{channel}")
+    :return: a new :class:`.CutSet` instance.
+    """
+    assert (
+        output_path is not None
+    ), "You must provide the 'output_path' argument to create a CutSet lazily."
+    assert (
+        features is not None or recordings is not None
+    ), "At least one of 'features' or 'recordings' has to be provided."
+    sup_ok, feat_ok, rec_ok = (
+        supervisions is not None,
+        features is not None,
+        recordings is not None,
+    )
+    for mtype, m in [
+        ("recordings", recordings),
+        ("supervisions", supervisions),
+        ("features", features),
+    ]:
+        if m is not None and not m.is_lazy:
+            logging.info(
+                f"Manifest passed in argument '{mtype}' is not opened lazily; "
+                f"open it with {type(m).__name__}.from_jsonl_lazy() to reduce the memory usage of this method."
+            )
+    if feat_ok:
+        # Case I: Features are provided.
+        # Use features to determine the cut boundaries and attach recordings and supervisions as available.
+
+        recordings = iter(recordings) if rec_ok else itertools.repeat(None)
+        # Find the supervisions that have corresponding recording_id;
+        # note that if the supervisions are not sorted, we can't fail here,
+        # because there might simply be no supervisions with that ID.
+        # It's up to the user to make sure it's sorted properly.
+        supervisions = iter(supervisions) if sup_ok else itertools.repeat(None)
+
+        with CutSet.open_writer(output_path) as writer:
+            for idx, feats in enumerate(features):
+                rec = next(recordings)
+                assert rec is None or rec.id == feats.recording_id, (
+                    f"Mismatched recording_id: Features.recording_id == {feats.recording_id}, "
+                    f"but Recording.id == '{rec.id}'"
+                )
+                sups = SupervisionSet.from_segments(
+                    itertools.takewhile(
+                        lambda s: s.recording_id == feats.recording_id, supervisions
+                    )
+                )
+                cut = MonoCut(
+                    id=str(uuid4())
+                    if random_ids
+                    else f"{feats.recording_id}-{idx}-{feats.channels}",
+                    start=feats.start,
+                    duration=feats.duration,
+                    channel=feats.channels,
+                    features=feats,
+                    recording=rec,
+                    # The supervisions' start times are adjusted if the features object starts at time other than 0s.
+                    supervisions=list(
+                        sups.find(
+                            recording_id=feats.recording_id,
+                            channel=feats.channels,
+                            start_after=feats.start,
+                            end_before=feats.end,
+                            adjust_offset=True,
+                        )
+                    )
+                    if sup_ok
+                    else [],
+                )
+                writer.write(cut)
+        return CutSet.from_jsonl_lazy(output_path)
+
+    # Case II: Recordings are provided (and features are not).
+    # Use recordings to determine the cut boundaries.
+
+    supervisions = iter(supervisions) if sup_ok else itertools.repeat(None)
+
+    with CutSet.open_writer(output_path) as writer:
+        for ridx, recording in enumerate(recordings):
+            # Find the supervisions that have corresponding recording_id;
+            # note that if the supervisions are not sorted, we can't fail here,
+            # because there might simply be no supervisions with that ID.
+            # It's up to the user to make sure it's sorted properly.
+            sups = SupervisionSet.from_segments(
+                itertools.takewhile(
+                    lambda s: s.recording_id == recording.id, supervisions
+                )
+            )
+            # A single cut always represents a single channel. When a recording has multiple channels,
+            # we create a new cut for each channel separately.
+            for cidx, channel in enumerate(recording.channel_ids):
+                cut = MonoCut(
+                    id=str(uuid4()) if random_ids else f"{recording.id}-{ridx}-{cidx}",
+                    start=0,
+                    duration=recording.duration,
+                    channel=channel,
+                    recording=recording,
+                    supervisions=list(
+                        sups.find(recording_id=recording.id, channel=channel)
+                    )
+                    if sup_ok
+                    else [],
+                )
+                writer.write(cut)
+
+    return CutSet.from_jsonl_lazy(output_path)
